@@ -209,6 +209,7 @@ import { allAppTools } from './tools/appTools';
 import { allDirectorTools } from './tools/directorTools';
 import { taskStatusTool } from './tools/taskStatusTool';
 import { videoGenerateTool } from './tools/videoGenerateTool';
+import { imageGenerateBatchTool } from './tools/imageGenerateBatchTool';
 import { imageGenerateTool } from './tools/imageGenerateTool';
 import { memoryWriteTool } from './tools/memoryTool';
 import { apimartRouteStatusTool } from './tools/apimartRouteTool';
@@ -241,6 +242,7 @@ export function createDefaultRegistry(): ToolRegistry {
   registry.register(memoryWriteTool);
   registry.register(videoGenerateTool);
   registry.register(imageGenerateTool);
+  registry.register(imageGenerateBatchTool);
   registry.register(apimartRouteStatusTool);
   registry.register(agentDelegateTool);
   for (const tool of allAppTools) {

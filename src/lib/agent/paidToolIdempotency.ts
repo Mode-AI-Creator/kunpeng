@@ -1,7 +1,7 @@
 import type { ToolResult } from './types';
 
 const PAID_TOOL_PATTERNS = [
-  /^image_generate$/,
+  /^image_generate(?:_batch)?$/,
   /^video_generate$/,
   /^canvas_generate(?:_batch)?$/,
   /^workshop_generate(?:_audio)?$/,
@@ -39,6 +39,7 @@ export function normalizedPaidCallKey(runId: string, name: string, params: Recor
 }
 
 export function classifyPaidSubmission(result: ToolResult): PaidSubmissionState {
+  if (result.paidSubmissionState) return result.paidSubmissionState;
   const text = `${result.error ?? ''}\n${result.output ?? ''}`;
   const hasConcreteTaskId = /task[_ -]?id["']?\s*[:=]\s*["']?[A-Za-z0-9_-]{4,}/i.test(text);
   const hasSubmittedStatus = /(?:status["']?\s*[:=]\s*["']?(?:submitted|processing|queued)|已提交|提交成功)/i.test(text);

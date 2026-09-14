@@ -1,6 +1,6 @@
 import type { Tool } from './types';
 
-const standaloneGenerators = new Set(['image_generate', 'video_generate', 'doubao_speech_generate']);
+const standaloneGenerators = new Set(['image_generate', 'image_generate_batch', 'video_generate', 'doubao_speech_generate']);
 
 export function isWorkspaceProjectGenerator(name: string): boolean {
   return standaloneGenerators.has(name);
@@ -33,6 +33,14 @@ export function workspaceProjectGenerationError(projectId: string, params: Recor
   if (params.output_path || params.target_node_id || params.object_id || params.objectId || params.media_id || params.mediaId
     || (params.create_canvas_node !== undefined && params.create_canvas_node !== false)) {
     return '项目普通生成只返回独立产物；指定路径覆盖、节点修改和对象采用请走对应的原专业工具。';
+  }
+  if (Array.isArray(params.jobs)) {
+    for (const job of params.jobs) {
+      if (job && typeof job === 'object') {
+        const error = workspaceProjectGenerationError(projectId, { ...job, project_id: projectId });
+        if (error) return error;
+      }
+    }
   }
   return null;
 }

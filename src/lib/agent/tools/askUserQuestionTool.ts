@@ -65,7 +65,8 @@ export const askUserQuestionTool: Tool = {
     },
   },
   risk: 'safe',
-  async execute(params) {
+  async execute(params, signal, context) {
+    if (signal?.aborted) return { success: false, output: '', error: '任务已停止，未创建问题' };
     const raw = (params as { questions?: AskUserQuestion[] }).questions;
     if (!Array.isArray(raw) || raw.length === 0) {
       return { success: false, output: '', error: 'questions must be a non-empty array' };
@@ -75,12 +76,21 @@ export const askUserQuestionTool: Tool = {
     }
     for (let i = 0; i < raw.length; i++) {
       const q = raw[i];
-      if (!q.question || !Array.isArray(q.options) || q.options.length < 2 || q.options.length > 4) {
+      if (!q || typeof q !== 'object' || typeof q.question !== 'string' || !q.question.trim() || !Array.isArray(q.options) || q.options.length < 2 || q.options.length > 4) {
         return {
           success: false,
           output: '',
           error: `question ${i}: must have 2-4 options and a question string`,
         };
+      }
+      const stringFields = ['id', 'header', 'context', 'defaultOptionId', 'submitLabel'] as const;
+      const booleanFields = ['multiSelect', 'allowCustom', 'required'] as const;
+      if (stringFields.some(key => q[key] !== undefined && typeof q[key] !== 'string')
+        || booleanFields.some(key => q[key] !== undefined && typeof q[key] !== 'boolean')
+        || q.options.some(option => !option || typeof option !== 'object' || typeof option.label !== 'string'
+          || (['id', 'description', 'badge'] as const).some(key => option[key] !== undefined && typeof option[key] !== 'string')
+          || (['recommended', 'disabled'] as const).some(key => option[key] !== undefined && typeof option[key] !== 'boolean'))) {
+        return { success: false, output: '', error: `question ${i}: invalid question or option field types` };
       }
       const labels = q.options.map((option) => option.label.trim());
       if (labels.some((label) => !label) || new Set(labels).size !== labels.length) {
@@ -96,6 +106,7 @@ export const askUserQuestionTool: Tool = {
 
     const normalized = raw.map((question, questionIndex) => ({
       ...question,
+      question: question.question.trim(),
       id: question.id?.trim() || `question-${questionIndex + 1}`,
       multiSelect: Boolean(question.multiSelect),
       allowCustom: question.allowCustom !== false,
@@ -108,6 +119,11 @@ export const askUserQuestionTool: Tool = {
           label: option.label.trim(),
         })),
     }));
+
+    if (new Set(normalized.map(q => q.id)).size !== normalized.length
+      || normalized.some(q => new Set(q.options.map(o => o.id)).size !== q.options.length)) {
+      return { success: false, output: '', error: '问题 ID 和每题的选项 ID 必须唯一' };
+    }
 
     // 无人值守时按 default → recommended → 首个可用选项的稳定顺序处理，
     // 不再把选择权模糊地交还给模型。
@@ -127,27 +143,31 @@ export const askUserQuestionTool: Tool = {
     }
 
     const chat = useChatStore.getState();
-    const sourceLabel = chat.sessions.find((session) => session.id === chat.currentSessionId)?.title
+    const sourceView = context?.decisionSource?.sourceView ?? chat.activeView;
+    const sourceSessionId = context?.decisionSource ? context.decisionSource.sourceSessionId : chat.currentSessionId;
+    const sourceLabel = context?.decisionSource?.sourceLabel || chat.sessions.find((session) => session.id === sourceSessionId)?.title
       || ({
         chat: '普通对话',
         canvas: '画布助手',
         workshop: '工坊助手',
         editor: '剪辑助手',
         copywriting: '文案助手',
-      } as Record<string, string>)[chat.activeView]
+      } as Record<string, string>)[sourceView]
       || '鲲鹏助手';
 
     const answers = await useAskUserStore.getState().ask(
       normalized,
       {
         sourceLabel,
-        sourceView: chat.activeView,
-        sourceSessionId: chat.currentSessionId,
+        sourceView,
+        sourceSessionId,
       },
+      signal,
     );
 
+    if (signal?.aborted) return { success: false, output: '', error: '任务已停止，问题已撤销' };
     if (!answers) {
-      return { success: true, output: '[用户未作答，已取消]' };
+      return { success: true, output: '[用户未作答，已取消。不要把取消当成同意或选择默认项，不要执行依赖本次决定的操作。]' };
     }
 
     const lines: string[] = [];

@@ -61,7 +61,7 @@ export function isSubagentToolAllowed(name: string, requestedGroups?: string[]):
     || name === 'sleep'
   )) return true;
   if (groups.has('generate') && (
-    ['image_generate', 'video_generate', 'doubao_speech_generate', 'aigc_optimize_prompt'].includes(name)
+    ['image_generate', 'image_generate_batch', 'video_generate', 'doubao_speech_generate', 'aigc_optimize_prompt'].includes(name)
     || name.startsWith('custom-media:')
   )) return true;
   if (groups.has('web') && ['web_search', 'web_fetch'].includes(name)) return true;

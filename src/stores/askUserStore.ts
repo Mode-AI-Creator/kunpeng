@@ -68,10 +68,11 @@ interface AskUserState {
   queue: PendingAsk[];
   history: AskUserRecord[];
   snoozed: boolean;
-  ask: (questions: AskUserQuestion[], meta: AskMeta) => Promise<AskUserAnswer[] | null>;
-  submit: (answers: AskUserAnswer[] | null) => void;
-  snooze: () => void;
-  resume: () => void;
+  ask: (questions: AskUserQuestion[], meta: AskMeta, signal?: AbortSignal) => Promise<AskUserAnswer[] | null>;
+  submit: (requestId: string, answers: AskUserAnswer[] | null) => void;
+  cancel: (requestId: string) => void;
+  snooze: (requestId: string) => void;
+  resume: (requestId: string) => void;
 }
 
 function requestId(): string {
@@ -87,25 +88,32 @@ export const useAskUserStore = create<AskUserState>((set, get) => ({
   history: [],
   snoozed: false,
 
-  ask: (questions, meta) => new Promise<AskUserAnswer[] | null>((resolve) => {
+  ask: (questions, meta, signal) => new Promise<AskUserAnswer[] | null>((resolve) => {
+    if (signal?.aborted) { resolve(null); return; }
+    const id = requestId();
+    const onAbort = () => get().cancel(id);
     const request: PendingAsk = {
-      id: requestId(),
+      id,
       questions,
-      resolve,
+      resolve: (answers) => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(answers);
+      },
       createdAt: Date.now(),
       sourceLabel: meta.sourceLabel,
       sourceView: meta.sourceView,
       sourceSessionId: meta.sourceSessionId,
     };
+    signal?.addEventListener('abort', onAbort, { once: true });
     set((state) => state.pending
       ? { queue: [...state.queue, request] }
       : { pending: request, snoozed: false });
+    if (signal?.aborted) onAbort();
   }),
 
-  submit: (answers) => {
+  submit: (requestId, answers) => {
     const { pending, queue, history } = get();
-    if (!pending) return;
-    pending.resolve(answers);
+    if (!pending || pending.id !== requestId) return;
     const [next, ...rest] = queue;
     const { resolve: _resolve, ...request } = pending;
     const record: AskUserRecord = {
@@ -120,13 +128,25 @@ export const useAskUserStore = create<AskUserState>((set, get) => ({
       history: [...history, record].slice(-40),
       snoozed: false,
     });
+    pending.resolve(answers);
   },
 
-  snooze: () => {
-    if (get().pending) set({ snoozed: true });
+  cancel: (requestId) => {
+    const { pending, queue, history } = get();
+    if (pending?.id === requestId) { get().submit(requestId, null); return; }
+    const request = queue.find(item => item.id === requestId);
+    if (!request) return;
+    const { resolve, ...record } = request;
+    set({ queue: queue.filter(item => item.id !== requestId),
+      history: [...history, { ...record, answers: null, status: 'cancelled' as const, resolvedAt: Date.now() }].slice(-40) });
+    resolve(null);
   },
 
-  resume: () => {
-    if (get().pending) set({ snoozed: false });
+  snooze: (requestId) => {
+    if (get().pending?.id === requestId) set({ snoozed: true });
+  },
+
+  resume: (requestId) => {
+    if (get().pending?.id === requestId) set({ snoozed: false });
   },
 }));

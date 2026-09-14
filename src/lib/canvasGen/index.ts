@@ -1,3 +1,4 @@
+import { GenerationSlots } from './slotQueue';
 /**
  * canvasGen — single orchestration layer for ALL generation.
  *
@@ -489,30 +490,9 @@ function generationTaskType(engine: RhtvCanvasEngine, refCount: number): 'text-t
   return 'text-to-video';
 }
 
-const waiters: (() => void)[] = [];
-
-async function acquireSlot(taskId: string): Promise<void> {
-  const store = useCanvasTaskStore.getState();
-  if (store.runningCount() < MAX_CONCURRENT_CANVAS_TASKS) return;
-  await new Promise<void>((resolve) => {
-    waiters.push(resolve);
-    // Re-check periodically too, in case a release was missed (defensive).
-    const iv = setInterval(() => {
-      if (useCanvasTaskStore.getState().runningCount() < MAX_CONCURRENT_CANVAS_TASKS) {
-        clearInterval(iv);
-        const idx = waiters.indexOf(resolve);
-        if (idx >= 0) waiters.splice(idx, 1);
-        resolve();
-      }
-    }, 2000);
-  });
-  void taskId;
-}
-
-function releaseSlot(): void {
-  const next = waiters.shift();
-  next?.();
-}
+const generationSlots = new GenerationSlots(MAX_CONCURRENT_CANVAS_TASKS);
+const acquireSlot = (taskId: string) => generationSlots.acquire(taskId);
+const releaseSlot = (taskId: string) => generationSlots.release(taskId);
 
 interface NonRhtvImageResult {
   paths: string[];
@@ -1042,7 +1022,7 @@ async function runApiCompatibleImageGeneration(req: CoreGenRequest, routeId: str
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -1301,7 +1281,7 @@ async function runApimartMidjourneyGeneration(
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -1447,7 +1427,7 @@ async function runApimartMinimaxH3Generation(
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -1605,7 +1585,7 @@ async function runKuaiziVideoChannel(
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -1768,7 +1748,7 @@ async function runCustomMediaGeneration(req: CoreGenRequest): Promise<CoreGenRes
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -1968,7 +1948,7 @@ async function runRhtvWan3Generation(req: CoreGenRequest, fallbackUsed = false):
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -2089,7 +2069,7 @@ async function runApimartWan3Generation(req: CoreGenRequest, fallbackUsed = fals
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -2341,7 +2321,7 @@ async function runSunoGeneration(req: CoreGenRequest): Promise<CoreGenResult> {
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -2473,7 +2453,7 @@ async function runArkSeedanceGeneration(req: CoreGenRequest): Promise<CoreGenRes
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -2898,7 +2878,7 @@ async function runStandardGeneration(req: CoreGenRequest): Promise<CoreGenResult
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -3024,7 +3004,7 @@ async function runDreaminaSeedance25Generation(req: CoreGenRequest): Promise<Cor
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 
@@ -3201,7 +3181,7 @@ async function runKuaiziSeedanceGeneration(req: CoreGenRequest): Promise<CoreGen
   } finally {
     taskAborts.delete(taskId);
     useCanvasTaskStore.getState().updateTask(taskId, { inFlight: false });
-    releaseSlot();
+    releaseSlot(taskId);
   }
 }
 

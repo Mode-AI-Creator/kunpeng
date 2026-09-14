@@ -35,7 +35,7 @@ export const PIPELINE_STAGES: PipelineStageCard[] = [
   {
     id: 'image', title: '生图',
     keywords: [/生图|生成.{0,4}(图片|海报|画面)|出图|画一张/, /分镜图|角色图|场景图|概念图/],
-    entryTools: ['image_generate'],
+    entryTools: ['image_generate', 'image_generate_batch'],
     prerequisites: ['确认画幅、模型、参考素材及主体保护要求'],
     handoff: '交接本地产物路径、模型、尺寸、参考素材和对应镜号。',
     fallback: '失败先按错误类型换路由或修正输入；同参数付费请求不得重复提交。',
