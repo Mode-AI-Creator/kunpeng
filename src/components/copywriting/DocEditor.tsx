@@ -1,3 +1,4 @@
+import { buildStoryReviewPrompt } from '@/lib/copywriting/screenwritingCraft';
 import { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -51,7 +52,7 @@ const TOOLBAR: ToolbarItem[] = [
 
 const EMPTY_CARDS = [
   { icon: Megaphone, label: '广告创意策划', desc: '抖音/小红书短视频广告', prompt: buildGuidePrompt('ad') },
-  { icon: BookOpen, label: '剧本分析诊断', desc: '6维量化 Coverage 报告', prompt: buildGuidePrompt('scriptDoctor') },
+  { icon: BookOpen, label: '剧本分析诊断', desc: '人物、因果、场景与对白审阅', prompt: buildGuidePrompt('scriptDoctor') },
   { icon: Clapperboard, label: '视频脚本创作', desc: '旅行/品牌/纪录片脚本', prompt: buildGuidePrompt('videoScript') },
 ];
 
@@ -441,6 +442,15 @@ export default function DocEditor({ doc }: Props) {
           >
             <MessageSquareText size={12} />
             批注{openCommentCount > 0 ? ` ${openCommentCount}` : ''}
+          </button>
+          <button
+            onClick={() => dispatchCopywritingPrompt(buildStoryReviewPrompt(doc.id))}
+            disabled={!doc.content.trim()}
+            className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-1.5 text-[11px] disabled:opacity-35"
+            style={{ color: 'var(--cw-text-2)', background: '#FFFFFF', border: '1px solid var(--cw-border)' }}
+            title="依据原文审阅人物、因果、场景和对白，只给意见，不改正文"
+          >
+            <Clapperboard size={12} /> 剧情审阅
           </button>
           <div className="relative">
             <button
