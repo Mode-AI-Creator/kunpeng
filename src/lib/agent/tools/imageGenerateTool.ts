@@ -35,6 +35,7 @@ export const imageGenerateTool: Tool = {
       '普通对话直接生成图片并返回本地图片，不创建画布节点。使用底部当前选择的 GPT Image 2.5、豆包 5 Pro 或 Midjourney；用户指定模型时可覆盖。GPT Image 2.5 由「设置 → 图片模型」中的 API 槽位路由。「GPT 生图」「GPT Image」指图像模型 gpt-image-2.5；Seedance 2.5 是视频模型，名称相似但完全不同，不要混淆。Midjourney 默认 V8.2（统一走 APIMart 通道），一次返回 4 张候选。'
       + 'APIMart 自动并行检测 api.apimart.ai、apib.ai、aiuxu.com、aishuch.com 并选择当前最快健康线路；遇到 TCP 超时时调用 apimart_route_status({refresh:true}) 查看真实状态，不要用 bash/curl 猜线路。'
       + '必须根据用户要求传 aspect_ratio；横图默认 16:9，竖图/小红书竖版通常 9:16，方图 1:1。不要只把比例写进 prompt，工具会把比例转换成供应商实际像素尺寸。'
+      + '两个及以上独立提示词必须一次调用 image_generate_batch；不要逐张调用，也不要依赖 DSH 的 Promise.all 来并行单张工具。'
       + '只有用户明确要求把结果放入画布时才改用 canvas_generate。',
     parameters: {
       type: 'object',

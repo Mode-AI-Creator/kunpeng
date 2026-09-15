@@ -36,6 +36,8 @@ export interface ToolResult {
   terminal?: boolean;
   /** User-facing final copy used when terminal is true. */
   terminalMessage?: string;
+  /** Conservative ledger state for a batch with partially submitted paid work. */
+  paidSubmissionState?: 'submitted' | 'unknown';
 }
 
 export type SubAgentTerminalStatus = 'completed' | 'failed' | 'timeout' | 'aborted';
@@ -63,6 +65,12 @@ export type SubAgentEvent =
   | { type: 'terminal'; id: string; runId: string; status: SubAgentTerminalStatus; conclusion?: string; error?: string };
 
 export interface ToolExecutionContext {
+  /** Capture the asking surface at run start, not whichever view is open later. */
+  decisionSource?: {
+    sourceView: import('../../stores/chatStore').ActiveView;
+    sourceSessionId: string | null;
+    sourceLabel?: string;
+  };
   /** Return visual evidence to the active model instead of a separate vision service. */
   nativeVision?: boolean;
   runId?: string;

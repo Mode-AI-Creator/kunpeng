@@ -422,11 +422,11 @@ function buildImageApiContext(settings: ReturnType<typeof useSettingsStore.getSt
     return `${i + 1}. ${s.label}: provider=${s.provider || 'dmxapi'}${latStr}`;
   });
 
-  return `普通对话生图必须优先调用 image_generate 工具，禁止自己拼 API 请求或临时编写生图脚本。该工具会读取底部当前选择的 GPT Image 2.5 / 豆包 5 Pro，并自动完成多 API 降级、参考图压缩、比例到像素尺寸的转换和图片回传。
+  return `普通对话单张生图调用 image_generate；两个及以上互不依赖的提示词必须一次调用 image_generate_batch({jobs:[...]})，由工具内部并行执行。DSH 中单张 MCP 工具即使写 Promise.all 仍会串行。禁止自己拼 API 请求或临时编写生图脚本。该工具会读取底部当前选择的 GPT Image 2.5 / 豆包 5 Pro，并自动完成多 API 降级、参考图压缩、比例到像素尺寸的转换和图片回传。
 
   GPT Image 2.5 由「设置 → 图片模型」中的 API 槽位自动路由。「GPT 生图」指图像模型 gpt-image-2.5，与视频模型 Seedance 2.5 名称相似但完全不同，不要混淆。
 
-  比例纪律：调用 image_generate 时必须传 aspect_ratio。用户明确说横版/竖版/方图或 16:9、9:16、1:1 等比例时严格照传；用户未指定才默认 16:9。禁止只把比例写进 prompt 而遗漏工具参数。
+  比例纪律：image_generate 以及 image_generate_batch 的每项 job 都必须传 aspect_ratio。用户明确说横版/竖版/方图或 16:9、9:16、1:1 等比例时严格照传；用户未指定才默认 16:9。禁止只把比例写进 prompt 而遗漏工具参数。
 
   当前配置的生图 API（按速度排序）：
 
@@ -1329,6 +1329,7 @@ export function useAgent(options?: { primary?: boolean }) {
       // for mid-run guidance would invalidate the active run's callbacks.
       setError(null);
       const settings = useSettingsStore.getState();
+      const decisionView = useChatStore.getState().activeView;
       const surface = inferAgentWorkspaceScope(content);
       const isOrdinaryChatRun = isOrdinarySubagentRun(
         isPrimary,
@@ -1432,6 +1433,8 @@ export function useAgent(options?: { primary?: boolean }) {
       // which session we write to. All persist/streaming callbacks use this value.
       const sessionId = useChatStore.getState().currentSessionId;
       activeRunSessionRef.current = sessionId;
+      const decisionSource = { sourceView: decisionView, sourceSessionId: sessionId,
+        sourceLabel: useChatStore.getState().sessions.find(session => session.id === sessionId)?.title };
       const resumeContext = isOrdinaryChatRun
         ? resumeContextQueueRef.current.consume(sessionId)
         : null;
@@ -1812,7 +1815,7 @@ export function useAgent(options?: { primary?: boolean }) {
       let subagentRunner: SubagentRunner | null = null;
       const registry = coordinator.getToolRegistry();
       const releaseWorkspaceDispatch = bindWorkspaceRunDispatch(runId, content);
-      registry.bindRunContext(runId, { nativeVision: ['deepseek', 'kimi'].includes(primaryRoute.providerId) });
+      registry.bindRunContext(runId, { decisionSource, nativeVision: ['deepseek', 'kimi'].includes(primaryRoute.providerId) });
       if (isOrdinaryChatRun) {
         subagentRunner = new SubagentRunner({
           parentRunId: runId,
@@ -1827,6 +1830,7 @@ export function useAgent(options?: { primary?: boolean }) {
             ),
         });
         registry.bindRunContext(runId, {
+          decisionSource,
           nativeVision: ['deepseek', 'kimi'].includes(primaryRoute.providerId),
           idempotencyRunId: runId,
           subagentDepth: 0,

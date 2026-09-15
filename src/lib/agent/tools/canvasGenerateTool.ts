@@ -482,7 +482,10 @@ export const canvasGenerateBatchTool: Tool = {
       return { success: false, output: '', error: `同一批不能重复生成节点 ${duplicate}，避免并发覆盖同一节点` };
     }
 
-    const settled = await Promise.all(jobs.map((job) => canvasGenerateTool.execute(job)));
+    const settled = await Promise.all(jobs.map(async (job) => {
+      try { return await canvasGenerateTool.execute(job); }
+      catch (error) { return { success: false, output: '', error: `生成异常或状态不明，禁止自动重提：${error instanceof Error ? error.message : String(error)}`, terminal: true }; }
+    }));
     const lines = settled.map((result, index) => {
       const nodeId = nodeIds[index] || `任务 ${index + 1}`;
       return result.success

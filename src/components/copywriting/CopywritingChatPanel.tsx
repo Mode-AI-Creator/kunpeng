@@ -276,7 +276,8 @@ function buildCopywritingHarness(expCtx: string, docCtx: string, taskSignal: str
 10. 兼容旧协议：也可以使用 \`\`\`copy:replace\`\`\`，第一行是块编号，后面是替换内容。
 11. 如果只是分析、建议、提纲或问用户问题，不要输出写回代码块。
 12. 输出经验沉淀时可追加 \`\`\`json:experience\`\`\`，但不要把它混入文档正文。
-13. 新写、改写或扩写完成后，调用 copywriting_review_doc 做一次机械审校。工具返回 blocker 或分数低于 80 时，只修命中的问题段，再复查一次；最多两轮，禁止为了刷分改坏事实和用户声线。
+13. 新写、改写或扩写完成后，调用 copywriting_review_doc 做一次机械审校。非剧本的工具结果返回 blocker 或分数低于 80 时，只修命中的问题段，再复查一次；最多两轮，禁止为了刷分改坏事实和用户声线。
+剧本的机械结果只作人工判断线索，不因词频或标点自动改对白与伏笔；剧作验收使用 copywriting_review_doc 的 mode=story 并由当前模型结合原文审阅。
 14. copywriting_set_doc / copywriting_patch_doc 的返回值自带文风审校。不要忽略审校结果，也不要把审校清单原样塞进正文。
 15. 不展示内部提纲、自检过程或思维链。需要向用户解释时，只说做了哪些可核验的修改。
 16. 用户要求“按批注修改、处理批注”或指定批注 id 时，先调用 copywriting_get_comments。逐条根据 body 修改 quote 对应原文，只做最小必要改动。

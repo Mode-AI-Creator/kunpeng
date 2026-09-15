@@ -48,6 +48,7 @@ const METAPHOR_WORDS = [
 
 function stripMarkdown(content: string): string {
   return content
+    .replace(/```(?:fountain|screenplay|剧本|markdown)\s*\n([\s\S]*?)```/gi, '$1')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/gm, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
@@ -87,7 +88,7 @@ function collectRegex(text: string, regex: RegExp): string[] {
 
 function detectWritingKind(content: string, text: string): WritingKind {
   if (
-    /(?:^|\n)\s*(?:INT\.|EXT\.|内景|外景|第\s*\d+\s*场|场景\s*\d+)/im.test(content)
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:INT\.|EXT\.|INT\.\/EXT\.|内景|外景|第\s*[\d一二三四五六七八九十百]+\s*场|场景\s*[\d一二三四五六七八九十]+)/im.test(content)
     || /\|\s*(?:镜号|画面|景别|运镜)\s*\|/.test(content)
   ) return 'screenplay';
   if (/\|\s*(?:口播|旁白|VO|台词)\s*\|/i.test(content) || /(?:口播|旁白|VO)[:：]/i.test(text)) return 'spoken';
@@ -288,6 +289,15 @@ export function auditCopywriting(content: string, options: AuditOptions = {}): W
     }
   }
 
+  // A lexical hit cannot establish that a character's speech or motif is bad writing.
+  // Keep evidence visible but never use it as an automatic screenplay rewrite gate.
+  if (kind === 'screenplay') {
+    for (const current of issues) {
+      current.severity = 'note';
+      current.suggestion = '先结合人物、动作和体裁判断此处是否有效；正常对白、打断、伏笔和有意重复应保留。仅在确认没有叙事作用时精修，不能按词频自动删除。';
+    }
+  }
+
   const penalty = issues.reduce((sum, current) => {
     if (current.severity === 'blocker') return sum + 18;
     if (current.severity === 'warning') return sum + 8;
@@ -296,7 +306,9 @@ export function auditCopywriting(content: string, options: AuditOptions = {}): W
   const score = text.length === 0 ? 0 : Math.max(35, 100 - penalty);
   const blockerCount = issues.filter((current) => current.severity === 'blocker').length;
   const warningCount = issues.filter((current) => current.severity === 'warning').length;
-  const grade: WritingQualityAudit['grade'] = blockerCount > 0 || score < 72
+  const grade: WritingQualityAudit['grade'] = kind === 'screenplay'
+    ? issues.length > 0 ? 'review' : 'clean'
+    : blockerCount > 0 || score < 72
     ? 'rewrite'
     : warningCount > 0 || score < 90
       ? 'review'
@@ -305,7 +317,9 @@ export function auditCopywriting(content: string, options: AuditOptions = {}): W
     ? '当前文档为空。'
     : issues.length === 0
       ? '未发现明显的模板化表达和标点滥用。仍需人工确认事实、观点与戏剧效果。'
-      : `发现 ${issues.length} 类表达问题，其中 ${blockerCount} 项必须处理、${warningCount} 项建议处理。`;
+      : kind === 'screenplay'
+        ? `发现 ${issues.length} 类需结合语境判断的表达线索；不代表剧情缺陷，不应自动改稿。`
+        : `发现 ${issues.length} 类表达问题，其中 ${blockerCount} 项必须处理、${warningCount} 项建议处理。`;
 
   return {
     score,
@@ -325,6 +339,7 @@ export function formatWritingAuditForAgent(audit: WritingQualityAudit): string {
   const lines = [
     `文风审校：${audit.score}/100，${status}，类型=${audit.kind}。`,
     audit.summary,
+    ...(audit.kind === 'screenplay' ? ['此分数仅反映机械词句检查，不是剧情评分，不触发自动改稿。'] : []),
   ];
   const prioritized = prioritizeWritingIssues(audit.issues);
   for (const current of prioritized) {

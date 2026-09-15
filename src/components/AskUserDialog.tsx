@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Check,
@@ -146,45 +146,18 @@ function ActiveAskUserDecisionCard({
   const resume = useAskUserStore((state) => state.resume);
 
   const [index, setIndex] = useState(0);
-  const [selections, setSelections] = useState<string[][]>([]);
-  const [freeTexts, setFreeTexts] = useState<string[]>([]);
-  const [customOpen, setCustomOpen] = useState<boolean[]>([]);
-
-  useEffect(() => {
-    setIndex(0);
-    setSelections(request.questions.map(() => []));
-    setFreeTexts(request.questions.map(() => ''));
-    setCustomOpen(request.questions.map(() => false));
-  }, [request.id]);
-
-  if (snoozed) {
-    return (
-      <motion.button
-        type="button"
-        onClick={resume}
-        initial={{ opacity: 0, y: 4 }}
-        animate={{ opacity: 1, y: 0 }}
-        className={`flex w-full items-center gap-2.5 rounded-lg border text-left ${compact ? 'px-2.5 py-2' : 'px-3 py-2.5'}`}
-        style={{ background: theme.background, borderColor: theme.border }}
-      >
-        <Clock3 size={compact ? 13 : 14} style={{ color: theme.muted }} />
-        <span className="min-w-0 flex-1">
-          <span className={`block font-medium ${compact ? 'text-[11px]' : 'text-[12px]'}`} style={{ color: theme.text }}>等待你的选择</span>
-          <span className={`block truncate ${compact ? 'text-[9px]' : 'text-[10px]'}`} style={{ color: theme.muted }}>{request.questions[0]?.question}</span>
-        </span>
-        <span className={compact ? 'text-[10px]' : 'text-[11px]'} style={{ color: theme.text }}>继续回答</span>
-      </motion.button>
-    );
-  }
+  const [selections, setSelections] = useState<string[][]>(() => request.questions.map(() => []));
+  const [freeTexts, setFreeTexts] = useState<string[]>(() => request.questions.map(() => ''));
+  const [customOpen, setCustomOpen] = useState<boolean[]>(() => request.questions.map(() => false));
 
   const current = request.questions[index];
-  if (!current) return null;
 
   const currentSelection = selections[index] ?? [];
   const currentFreeText = freeTexts[index]?.trim() ?? '';
-  const currentReady = Boolean(currentSelection.length || currentFreeText || current.required === false);
+  const currentReady = Boolean(currentSelection.length || currentFreeText || current?.required === false);
 
-  const primaryLabel = useMemo(() => {
+  const primaryLabel = (() => {
+    if (!current) return '确认并继续';
     if (index < request.questions.length - 1) return '下一步';
     if (current.submitLabel?.trim()) return current.submitLabel.trim();
     if (compact) return '确认并继续';
@@ -194,7 +167,7 @@ function ActiveAskUserDecisionCard({
       if (selected && selected.label.length <= 10) return `采用「${selected.label}」并继续`;
     }
     return '确认选择并继续';
-  }, [compact, current, currentFreeText, currentSelection, index, request.questions.length]);
+  })();
 
   const toggle = (key: string) => {
     setSelections((previous) => previous.map((row, questionIndex) => {
@@ -227,28 +200,34 @@ function ActiveAskUserDecisionCard({
   const continueFlow = () => {
     if (!currentReady) return;
     if (index < request.questions.length - 1) {
-      setIndex((value) => value + 1);
+      setIndex(index + 1);
       return;
     }
-    submit(buildAnswers());
+    submit(request.id, buildAnswers());
   };
 
   const skipCurrent = () => {
     if (current.required !== false) return;
-    if (index < request.questions.length - 1) setIndex((value) => value + 1);
-    else submit(buildAnswers());
+    const answers = buildAnswers();
+    answers[index] = { questionId: current.id, selected: [], selectedOptionIds: [] };
+    setSelections(previous => previous.map((row, i) => i === index ? [] : row));
+    setFreeTexts(previous => previous.map((text, i) => i === index ? '' : text));
+    if (index < request.questions.length - 1) setIndex(index + 1);
+    else submit(request.id, answers);
   };
 
   useEffect(() => {
+    if (snoozed || !current) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+      const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable;
+      if (event.defaultPrevented || event.isComposing) return;
       if (event.key === 'Escape') {
         event.preventDefault();
-        snooze();
+        snooze(request.id);
         return;
       }
-      if (!typing && /^[1-4]$/.test(event.key)) {
+      if (!typing && !event.metaKey && !event.ctrlKey && !event.altKey && /^[1-4]$/.test(event.key)) {
         const option = current.options[Number(event.key) - 1];
         if (option && !option.disabled) {
           event.preventDefault();
@@ -256,7 +235,7 @@ function ActiveAskUserDecisionCard({
         }
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && target?.closest('[data-ask-request-id]')?.getAttribute('data-ask-request-id') === request.id) {
         event.preventDefault();
         continueFlow();
       }
@@ -264,6 +243,28 @@ function ActiveAskUserDecisionCard({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
+
+  if (snoozed) {
+    return (
+      <motion.button
+        type="button"
+        onClick={() => resume(request.id)}
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        className={`flex w-full items-center gap-2.5 rounded-lg border text-left ${compact ? 'px-2.5 py-2' : 'px-3 py-2.5'}`}
+        style={{ background: theme.background, borderColor: theme.border }}
+      >
+        <Clock3 size={compact ? 13 : 14} style={{ color: theme.muted }} />
+        <span className="min-w-0 flex-1">
+          <span className={`block font-medium ${compact ? 'text-[11px]' : 'text-[12px]'}`} style={{ color: theme.text }}>等待你的选择</span>
+          <span className={`block truncate ${compact ? 'text-[9px]' : 'text-[10px]'}`} style={{ color: theme.muted }}>{request.questions[0]?.question}</span>
+        </span>
+        <span className={compact ? 'text-[10px]' : 'text-[11px]'} style={{ color: theme.text }}>继续回答</span>
+      </motion.button>
+    );
+  }
+
+  if (!current) return null;
 
   return (
     <motion.section
@@ -273,6 +274,7 @@ function ActiveAskUserDecisionCard({
       className={`overflow-hidden rounded-xl border ${compact ? '' : 'max-w-[640px]'}`}
       style={{ background: theme.background, borderColor: theme.border }}
       aria-label="Agent 决策问题"
+      data-ask-request-id={request.id}
     >
       <div className={`flex items-center gap-2.5 border-b ${compact ? 'px-3 py-2.5' : 'px-4 py-3'}`} style={{ borderColor: theme.border }}>
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md" style={{ background: theme.surface, color: theme.text }}>
@@ -386,8 +388,8 @@ function ActiveAskUserDecisionCard({
         {current.required === false && (
           <button type="button" onClick={skipCurrent} className="h-7 rounded-md px-1.5 text-[9px]" style={{ color: theme.muted }}>跳过</button>
         )}
-        <button type="button" onClick={snooze} className="h-7 rounded-md px-1.5 text-[9px]" style={{ color: theme.muted }}>稍后</button>
-        <button type="button" onClick={() => submit(null)} className="h-7 rounded-md px-1.5 text-[9px]" style={{ color: theme.muted }}>结束</button>
+        <button type="button" onClick={() => snooze(request.id)} className="h-7 rounded-md px-1.5 text-[9px]" style={{ color: theme.muted }}>稍后</button>
+        <button type="button" onClick={() => submit(request.id, null)} className="h-7 rounded-md px-1.5 text-[9px]" style={{ color: theme.muted }}>结束</button>
         <button
           type="button"
           disabled={!currentReady}
@@ -415,5 +417,5 @@ export function AskUserDecisionCard({
   if (isResolved(request)) {
     return <ResolvedDecisionCard request={request} variant={variant} />;
   }
-  return <ActiveAskUserDecisionCard request={request} variant={variant} queueLength={queueLength} />;
+  return <ActiveAskUserDecisionCard key={request.id} request={request} variant={variant} queueLength={queueLength} />;
 }

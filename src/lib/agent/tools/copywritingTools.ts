@@ -9,6 +9,7 @@ import {
   type CopyPatch,
 } from '@/lib/copywriting/documentMap';
 import { backupDoc, writeDoc, writeDocsIndex } from '@/lib/copywriting/persist';
+import { buildStoryReviewPacket } from '@/lib/copywriting/storyReview';
 import { auditCopywriting, formatWritingAuditForAgent } from '@/lib/copywriting/qualityAudit';
 
 function getDoc(docId?: unknown): CopyDoc | null {
@@ -56,6 +57,7 @@ function summarizeAudit(content: string) {
   const audit = auditCopywriting(content);
   return {
     score: audit.score,
+    kind: audit.kind,
     grade: audit.grade,
     blockerCount: audit.blockerCount,
     warningCount: audit.warningCount,
@@ -312,11 +314,14 @@ export const copywritingReplaceTextTool: Tool = {
 export const copywritingReviewDocTool: Tool = {
   definition: {
     name: 'copywriting_review_doc',
-    description: '审校当前文案的模板化表达、破折号、对立句、连接词、重复句首、重复意象和空泛词。用于生成或改写后的质量闸门；它不自动改文案。',
+    description: '只读审阅文案。默认 style 检查表达；mode=story 返回带块位置的剧情原文和专业审阅问题，由当前模型进行因果、人物、场景、对白与连续性审阅。长稿按 nextStart 读取，不能把机械文风分当剧情分。',
     parameters: {
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: '可选，指定文档 id；默认当前打开文档' },
+        mode: { type: 'string', enum: ['style', 'story'], description: '默认 style；剧情/编剧审阅使用 story' },
+        start: { type: 'integer', description: 'story 原文起始字符位置，首次为 0；后续传 nextStart' },
+        content_revision: { type: 'integer', description: '后续分页传上一页 doc.contentRevision，防止混用修改前后的正文' },
       },
     },
   },
@@ -324,6 +329,22 @@ export const copywritingReviewDocTool: Tool = {
   async execute(params) {
     const doc = getDoc(params.doc_id);
     if (!doc) return { success: false, output: '', error: '当前没有打开文档' };
+    if (params.mode !== undefined && params.mode !== 'style' && params.mode !== 'story') {
+      return { success: false, output: '', error: 'mode 仅支持 style 或 story' };
+    }
+    if (params.mode === 'story') {
+      if (params.content_revision !== undefined && params.content_revision !== (doc.contentRevision ?? 0)) {
+        return { success: false, output: '', error: '文档版本已变化，请从 start=0 重新读取。' };
+      }
+      try {
+        const start = params.start === undefined ? 0 : params.start;
+        if (typeof start !== 'number') throw new Error('start 必须为整数');
+        if (start > 0 && params.content_revision === undefined) throw new Error('后续分页必须传 content_revision，请使用上一页 doc.contentRevision。');
+        return ok({ doc: summarizeDoc(doc), storyReview: buildStoryReviewPacket(doc.content, start) });
+      } catch (error) {
+        return { success: false, output: '', error: error instanceof Error ? error.message : '读取范围无效' };
+      }
+    }
     const audit = auditCopywriting(doc.content);
     return ok({
       doc: summarizeDoc(doc),
@@ -336,7 +357,9 @@ export const copywritingReviewDocTool: Tool = {
         issues: audit.issues,
         report: formatWritingAuditForAgent(audit),
       },
-      nextAction: audit.grade === 'clean'
+      nextAction: audit.kind === 'screenplay'
+        ? '这些仅为文风线索，不自动改稿。剧情判断请调用 mode=story 读取原文并作证据驱动审阅。'
+        : audit.grade === 'clean'
         ? '通过机械审校。仍需人工确认事实、创意和情感是否成立。'
         : '只修改 issues 命中的最小段落，然后再次调用 copywriting_review_doc；最多复查两轮。',
     });

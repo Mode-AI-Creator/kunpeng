@@ -18,6 +18,7 @@ export function shouldRequireDoubaoSpeechToolCall(input: string): boolean {
 const CONFLICTING_GENERATION_TOOLS = new Set([
   'video_generate',
   'image_generate',
+  'image_generate_batch',
   'canvas_generate',
   'canvas_generate_batch',
   'mg_generate_with_reference_boards',
