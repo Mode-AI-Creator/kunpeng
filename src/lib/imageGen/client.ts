@@ -11,7 +11,7 @@ import { readBinaryFile } from '@tauri-apps/api/fs';
 import { useSettingsStore, type ImageApiSlot } from '@/stores/settingsStore';
 import { resolveSlotApiKey } from '@/lib/credentials';
 import { assetUrlToLocalPath } from '@/lib/rhtv/upload';
-import { uploadToMinio } from '@/lib/minioUpload';
+import { hasCustomMediaStorage, uploadToMinio } from '@/lib/minioUpload';
 import { normalizeGptImage2Size, normalizeSeedreamProSize, fitSeedreamProPixelSize } from './size';
 import { imageAttemptStopError } from './attemptPolicy';
 import {
@@ -675,14 +675,17 @@ async function tryGenerate(
       let displayUrl = convertFileSrc(savedPath);
       const savedName = savedPath.split('/').pop() || `generated-${Date.now()}.png`;
       console.info('[image] local-result-saved', { path: savedPath, fileName: savedName });
-      try {
-        displayUrl = await uploadToMinio(savedPath, savedName);
-        console.info('[image] minio-archive-success', { path: savedPath, url: displayUrl });
-      } catch (archiveError) {
-        console.error('[image] minio-archive-failed-local-kept', {
-          path: savedPath,
-          error: archiveError instanceof Error ? archiveError.message : String(archiveError),
-        });
+      // 仅在配置了 S3/MinIO 自建存储时归档到 CDN；未配置时保留本地预览（与改造前一致）。
+      if (hasCustomMediaStorage()) {
+        try {
+          displayUrl = await uploadToMinio(savedPath, savedName);
+          console.info('[image] minio-archive-success', { path: savedPath, url: displayUrl });
+        } catch (archiveError) {
+          console.error('[image] minio-archive-failed-local-kept', {
+            path: savedPath,
+            error: archiveError instanceof Error ? archiveError.message : String(archiveError),
+          });
+        }
       }
       console.log(`✅ [${slot.label}] ${model} 生成成功，耗时 ${((Date.now() - t1) / 1000).toFixed(1)}s`);
       return { success: true, imagePath: savedPath, imageUrl: displayUrl, modelUsed: model, apiUsed: slot.label };

@@ -549,11 +549,11 @@ export const useSettingsStore = create<SettingsState>()(
       setCosTransitEndpoint: (cosTransitEndpoint) => set({ cosTransitEndpoint }),
 
       // Self-hosted MinIO media upload API
-      mediaUploadEndpoint: 'https://ysqvr.com/api/storage/upload',
+      mediaUploadEndpoint: '',
       mediaUploadApiKey: '',
-      mediaPublicBaseUrl: 'https://cdn.ysqvr.com',
+      mediaPublicBaseUrl: '',
       setMediaUploadEndpoint: (mediaUploadEndpoint) => set({ mediaUploadEndpoint }),
-      setMediaUploadApiKey: (mediaUploadApiKey) => set({ mediaUploadApiKey }),
+      setMediaUploadApiKey: (mediaUploadApiKey) => set((s) => ({ mediaUploadApiKey, ...mirrorCredentialWrite(s, 'mediaUpload', mediaUploadApiKey) })),
       setMediaPublicBaseUrl: (mediaPublicBaseUrl) => set({ mediaPublicBaseUrl }),
       // Generic S3-compatible media storage
       s3Endpoint: '',
@@ -567,8 +567,15 @@ export const useSettingsStore = create<SettingsState>()(
       setS3Endpoint: (s3Endpoint) => set({ s3Endpoint }),
       setS3Region: (s3Region) => set({ s3Region }),
       setS3Bucket: (s3Bucket) => set({ s3Bucket }),
-      setS3AccessKeyId: (s3AccessKeyId) => set({ s3AccessKeyId }),
-      setS3SecretAccessKey: (s3SecretAccessKey) => set({ s3SecretAccessKey }),
+      // S3 凭证以 `AccessKeyId:SecretAccessKey` 合并存储（同 COS 模式），写两侧都镜像合成值
+      setS3AccessKeyId: (s3AccessKeyId) => set((s) => ({
+        s3AccessKeyId,
+        ...mirrorCredentialWrite(s, 's3', `${s3AccessKeyId}:${s.s3SecretAccessKey}`),
+      })),
+      setS3SecretAccessKey: (s3SecretAccessKey) => set((s) => ({
+        s3SecretAccessKey,
+        ...mirrorCredentialWrite(s, 's3', `${s.s3AccessKeyId}:${s3SecretAccessKey}`),
+      })),
       setS3Prefix: (s3Prefix) => set({ s3Prefix }),
       setS3PublicBaseUrl: (s3PublicBaseUrl) => set({ s3PublicBaseUrl }),
       setS3ForcePathStyle: (s3ForcePathStyle) => set({ s3ForcePathStyle }),

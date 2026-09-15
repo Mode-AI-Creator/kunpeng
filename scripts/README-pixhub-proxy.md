@@ -32,7 +32,7 @@ PIXHUB_API_KEY=你的_Pixhub_密钥
 ```
 
 ```bash
-cd /Users/adtiger/kunpeng
+cd <项目根>
 python3 scripts/pixhub_images_proxy.py
 ```
 

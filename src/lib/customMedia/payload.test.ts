@@ -118,4 +118,3 @@ test('custom video payload carries what the H3 proxy needs', () => {
   assert.equal(payload.resolution, '480p横');
   assert.equal(payload.size, '16:9');
 });
-

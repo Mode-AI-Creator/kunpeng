@@ -1,6 +1,7 @@
 /** Upload local media directly to an S3-compatible object store. */
 import { Command } from '@tauri-apps/api/shell';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { resolveS3Secrets } from '@/lib/credentials';
 
 export interface S3UploadProgress {
   stage: 'preparing' | 'uploading' | 'completed';
@@ -38,8 +39,9 @@ export async function uploadToS3(
   const endpoint = state.s3Endpoint.trim();
   const region = state.s3Region.trim() || 'us-east-1';
   const bucket = state.s3Bucket.trim();
-  const accessKeyId = state.s3AccessKeyId.trim();
-  const secretAccessKey = state.s3SecretAccessKey.trim();
+  const resolved = resolveS3Secrets(state, state.s3AccessKeyId, state.s3SecretAccessKey);
+  const accessKeyId = resolved.accessKeyId.trim();
+  const secretAccessKey = resolved.secretAccessKey.trim();
   const prefix = state.s3Prefix.trim().replace(/^\/+|\/+$/g, '');
   const publicBaseUrl = state.s3PublicBaseUrl.trim().replace(/\/$/, '');
 
@@ -55,14 +57,14 @@ export async function uploadToS3(
   onProgress?.({ stage: 'preparing', loadedBytes: 0, totalBytes: 0, percent: 0 });
 
   const pyScript = `
-import os, sys, subprocess
+import os, sys
 try:
     import boto3
     from botocore.config import Config
 except ImportError:
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', '-q', 'boto3'])
-    import boto3
-    from botocore.config import Config
+    # 不做静默联网安装；明确提示用户手动装依赖。
+    sys.stderr.write('缺少 boto3 依赖，请先安装：pip install boto3\\n')
+    sys.exit(3)
 
 client = boto3.client(
     's3', endpoint_url=os.environ['S3_ENDPOINT'], region_name=os.environ['S3_REGION'],

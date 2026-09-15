@@ -1,4 +1,4 @@
-import { uploadToMinio } from '@/lib/minioUpload';
+import { uploadMediaSmart } from '@/lib/minioUpload';
 import { assetUrlToLocalPath } from '@/lib/rhtv/upload';
 
 function isPublicHttpUrl(value: string): boolean {
@@ -29,7 +29,7 @@ export async function resolveCopyableMediaUrl(
     throw new Error('当前素材没有可上传的本地文件');
   }
 
-  return uploadToMinio(path, fileNameFromPath(path, fallbackName));
+  return uploadMediaSmart(path, fileNameFromPath(path, fallbackName));
 }
 
 /** Clipboard helper with a WebView fallback for macOS/Tauri environments. */

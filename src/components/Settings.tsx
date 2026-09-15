@@ -1087,7 +1087,7 @@ function ApiKeysTab({ section }: { section: ApiSettingsSection }) {
         <div className="space-y-2">
           <div>
             <label className="block text-xs text-zinc-500 mb-1">上传 API 地址</label>
-            <input type="text" value={mediaUploadEndpoint} onChange={(e) => setMediaUploadEndpoint(e.target.value)} className={inputCls} placeholder="https://ysqvr.com/api/storage/upload" />
+            <input type="text" value={mediaUploadEndpoint} onChange={(e) => setMediaUploadEndpoint(e.target.value)} className={inputCls} placeholder="https://your-server.example.com/api/storage/upload" />
           </div>
           <div>
             <label className="block text-xs text-zinc-500 mb-1">上传 API Key</label>
@@ -1106,7 +1106,7 @@ function ApiKeysTab({ section }: { section: ApiSettingsSection }) {
           </div>
           <div>
             <label className="block text-xs text-zinc-500 mb-1">素材公网 CDN 地址</label>
-            <input type="text" value={mediaPublicBaseUrl} onChange={(e) => setMediaPublicBaseUrl(e.target.value)} className={inputCls} placeholder="https://cdn.ysqvr.com" />
+            <input type="text" value={mediaPublicBaseUrl} onChange={(e) => setMediaPublicBaseUrl(e.target.value)} className={inputCls} placeholder="https://cdn.example.com" />
             <p className="text-[10px] text-zinc-500 mt-0.5">CDN 域名需要反代 MinIO 的公开 Bucket；留空则使用上传 API 返回的地址。</p>
           </div>
         </div>

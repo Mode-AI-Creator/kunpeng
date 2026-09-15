@@ -9,7 +9,7 @@ import { fetch as tauriFetch, ResponseType } from '@tauri-apps/api/http';
 import { writeBinaryFile, createDir } from '@tauri-apps/api/fs';
 import { invoke } from '@tauri-apps/api/tauri';
 import { cosTransitDownload } from '@/lib/cos';
-import { uploadToMinio } from '@/lib/minioUpload';
+import { hasCustomMediaStorage, uploadToMinio } from '@/lib/minioUpload';
 import { downloadCompletedLabel, downloadProgressLabel, type DownloadMediaKind } from './downloadLabels.ts';
 
 let counter = 0;
@@ -60,8 +60,7 @@ export async function rhtvDownloadResult(
   const resp = await tauriFetch(downloadUrl, {
     method: 'GET',
     responseType: ResponseType.Binary,
-    // 同步图片没有可恢复的远端 task_id；限制直连下载时间，避免画布永久停在 downloading。
-    timeout: kind === 'image' && downloadUrl === url ? 300 : downloadUrl === url ? 600 : 120,
+    timeout: downloadUrl === url ? 600 : 120,
   });
   if (!resp.ok) throw new Error(`下载失败 HTTP ${resp.status}: ${downloadUrl.slice(0, 120)}`);
 
@@ -69,20 +68,23 @@ export async function rhtvDownloadResult(
   const path = `${dir}/${namePrefix}_${Date.now()}_${++counter}.${ext}`;
   await writeBinaryFile(path, new Uint8Array(resp.data as number[] | ArrayBuffer as ArrayBuffer));
   console.info('[media] result-download:local-saved', { kind, path });
-  onProgress?.('上传到 MinIO/CDN 中…');
-  try {
-    const hostedUrl = await uploadToMinio(path, `${namePrefix}_${Date.now()}.${ext}`);
-    hostedUrlByLocalPath.set(path, hostedUrl);
-  } catch (err) {
-    // The generated media is already safely stored locally. Do not turn a
-    // secondary CDN archival failure into a paid-generation failure, which
-    // would cause the recovery poller to retry the same task forever.
-    console.error('[media] minio-archive:failed-local-kept', {
-      kind,
-      path,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    onProgress?.('MinIO 上传失败，已保留本地结果');
+  // 仅在配置了 S3/MinIO 自建存储时归档到 CDN；未配置时保持本地路径（与改造前一致）。
+  if (hasCustomMediaStorage()) {
+    onProgress?.('上传到 MinIO/CDN 中…');
+    try {
+      const hostedUrl = await uploadToMinio(path, `${namePrefix}_${Date.now()}.${ext}`);
+      hostedUrlByLocalPath.set(path, hostedUrl);
+    } catch (err) {
+      // The generated media is already safely stored locally. Do not turn a
+      // secondary CDN archival failure into a paid-generation failure, which
+      // would cause the recovery poller to retry the same task forever.
+      console.error('[media] minio-archive:failed-local-kept', {
+        kind,
+        path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      onProgress?.('MinIO 上传失败，已保留本地结果');
+    }
   }
   onProgress?.(downloadCompletedLabel(kind));
   return path;

@@ -1,7 +1,9 @@
 /** Upload local media through the self-hosted FastAPI → MinIO service. */
 import { fetch as tauriFetch, Body, ResponseType } from '@tauri-apps/api/http';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { resolveApiKey } from '@/lib/credentials';
 import { uploadToS3 } from '@/lib/s3Upload';
+import { uploadToCos } from '@/lib/cos';
 
 export interface MinioUploadProgress {
   stage: 'preparing' | 'uploading' | 'completed';
@@ -46,7 +48,7 @@ export async function uploadToMinio(
     return uploadToS3(localPath, fileName, contentTypeOverride, onProgress);
   }
   const endpoint = state.mediaUploadEndpoint.trim();
-  const apiKey = state.mediaUploadApiKey.trim();
+  const apiKey = resolveApiKey(state, 'mediaUpload', state.mediaUploadApiKey).trim();
   if (!endpoint || !apiKey) {
     throw new Error('请先在设置中配置 MinIO 上传 API 地址和 API Key');
   }
@@ -117,4 +119,29 @@ export async function uploadToMinio(
   onProgress?.({ stage: 'uploading', loadedBytes: 1, totalBytes: 1, percent: 100 });
   onProgress?.({ stage: 'completed', loadedBytes: 1, totalBytes: 1, percent: 100 });
   return publicUrl;
+}
+
+/** 是否配置了自建媒体存储（S3 或 MinIO 上传 API 任一可用）。 */
+export function hasCustomMediaStorage(
+  state: ReturnType<typeof useSettingsStore.getState> = useSettingsStore.getState(),
+): boolean {
+  if (state.s3Endpoint.trim()) return true;
+  const apiKey = resolveApiKey(state, 'mediaUpload', state.mediaUploadApiKey).trim();
+  return Boolean(state.mediaUploadEndpoint.trim() && apiKey);
+}
+
+/**
+ * 媒体上传分发：配置了 S3/MinIO 走 uploadToMinio（内部再分 S3/MinIO），
+ * 否则回退腾讯云 COS uploadToCos——未配置自建存储时行为与改造前一致。
+ */
+export async function uploadMediaSmart(
+  localPath: string,
+  fileName: string,
+  contentTypeOverride?: string,
+  onProgress?: (progress: MinioUploadProgress) => void,
+): Promise<string> {
+  if (hasCustomMediaStorage()) {
+    return uploadToMinio(localPath, fileName, contentTypeOverride, onProgress);
+  }
+  return uploadToCos(localPath, fileName, contentTypeOverride, onProgress);
 }

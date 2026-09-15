@@ -190,14 +190,23 @@ export async function rhtvResolveMedia(ref: string): Promise<string> {
   try {
     return await rhtvUploadFile(localPath);
   } catch (err) {
-    const { uploadToMinio } = await import('@/lib/minioUpload');
+    // MinIO/S3 配置了则优先走自建存储，失败或未配置都回退 COS 兜底链。
+    const { hasCustomMediaStorage, uploadToMinio } = await import('@/lib/minioUpload');
+    const { uploadToCos } = await import('@/lib/cos');
     const fileName = localPath.split('/').pop() || `rhtv-ref-${Date.now()}`;
-    console.warn('[rhtv] 标准 multipart 上传失败，切换 COS URL 兜底:', err);
+    console.warn('[rhtv] 标准 multipart 上传失败，切换公网存储兜底:', err);
     try {
-      return await uploadToMinio(localPath, fileName);
+      if (hasCustomMediaStorage()) {
+        try {
+          return await uploadToMinio(localPath, fileName);
+        } catch (minioErr) {
+          console.warn('[rhtv] MinIO/S3 上传失败，回退 COS 兜底:', minioErr);
+        }
+      }
+      return await uploadToCos(localPath, fileName);
     } catch (cosErr) {
-      // 两级都失败时保留原始 multipart 错误——只抛 COS 报错会掩盖真正病因
-      throw new Error(`上传失败（multipart: ${err instanceof Error ? err.message : String(err)}；MinIO 兜底: ${cosErr instanceof Error ? cosErr.message : String(cosErr)}）`);
+      // 两级都失败时保留原始 multipart 错误——只抛公网存储报错会掩盖真正病因
+      throw new Error(`上传失败（multipart: ${err instanceof Error ? err.message : String(err)}；公网存储兜底: ${cosErr instanceof Error ? cosErr.message : String(cosErr)}）`);
     }
   }
 }

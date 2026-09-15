@@ -3,7 +3,7 @@
 零第三方依赖的 Python HTTP 代理，把鲲鹏/APIMart 风格的标准异步视频协议转换成 AutoDL 的
 MiniMax H3 ComfyUI 工作流接口（`minimax_h3_lightx2v_v5_15s`，图生视频）。
 
-> 同一实现也镜像在 `/Users/adtiger/claw/minimax_h3_proxy/`，两处内容一致，改动请同步。
+> 同一实现也镜像在配套的 minimax_h3_proxy 部署目录，两处内容一致，改动请同步。
 
 ## 对外接口
 
@@ -31,7 +31,7 @@ MINIMAX_UPSTREAM_API_KEY=你的_AutoDL_密钥
 ```
 
 ```bash
-cd /Users/adtiger/kunpeng
+cd <项目根>
 python3 scripts/minimax_comfyui_proxy.py
 ```
 
@@ -123,7 +123,7 @@ API Key:  与 MINIMAX_PROXY_API_KEY 相同（未设置则留空）
 
 ```bash
 # 先启动适配服务，再执行
-cd /Users/adtiger/kunpeng
+cd <项目根>
 node scripts/minimax_h3_live_check.mjs
 ```
 
