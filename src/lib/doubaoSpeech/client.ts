@@ -6,6 +6,7 @@ import { resolveApiKey, resolveCosSecrets } from '@/lib/credentials';
 import { generateSeedAudioViaKuaizi } from '@/lib/kuaizi/seedAudio';
 import { getKuaiziApiKey, resolveKuaiziMediaRef } from '@/lib/kuaizi/seedance';
 import { uploadToCos } from '@/lib/cos';
+import { hasCustomMediaStorage, uploadToMinio } from '@/lib/minioUpload';
 import { nanoid } from 'nanoid';
 import {
   PaidSubmissionUnknownError,
@@ -169,21 +170,24 @@ function sniffAudioExt(bytes: Uint8Array): string {
 }
 
 /**
- * 本地参考音色（base64）→ 落临时文件 → 传 COS 换公网 URL。
- * 筷子 seed_audio 只接受公网 HTTP(S) 参考，本地文件必须走 COS 中转。
+ * 本地参考音色（base64）→ 落临时文件 → 传公网存储换 URL。
+ * 配置了 S3/MinIO 走自建存储，否则回退腾讯云 COS。
+ * 筷子 seed_audio 只接受公网 HTTP(S) 参考，本地文件必须走公网存储中转。
  */
 async function uploadSpeechReferenceToCos(base64: string): Promise<string> {
   const st = useSettingsStore.getState();
+  const useCustomStorage = hasCustomMediaStorage(st);
   const cosSecrets = resolveCosSecrets(st, st.cosSecretId, st.cosSecretKey);
-  if (!st.cosBucket || !cosSecrets.secretId.trim() || !cosSecrets.secretKey.trim()) {
-    throw new Error('筷子丽帧配音通道使用本地参考音色，需要先在「设置 → 存储与集成 → 腾讯云 COS」完成配置（用于换取公网 URL），或改用豆包官方通道');
+  const hasCos = Boolean(st.cosBucket && cosSecrets.secretId.trim() && cosSecrets.secretKey.trim());
+  if (!useCustomStorage && !hasCos) {
+    throw new Error('筷子丽帧配音通道使用本地参考音色，需要先在「设置 → 存储与集成」配置腾讯云 COS 或自建 S3/MinIO 存储（用于换取公网 URL），或改用豆包官方通道');
   }
   const bytes = base64ToBytes(base64);
   const ext = sniffAudioExt(bytes);
   const fileName = `kunpeng-voice-ref-${Date.now()}-${nanoid(6)}.${ext}`;
   const tmpPath = `${await appCacheDir()}${fileName}`;
   await writeBinaryFile(tmpPath, bytes);
-  return uploadToCos(tmpPath, fileName);
+  return useCustomStorage ? uploadToMinio(tmpPath, fileName) : uploadToCos(tmpPath, fileName);
 }
 
 /**

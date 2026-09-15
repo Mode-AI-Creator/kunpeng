@@ -65,6 +65,7 @@ export const LEGACY_CAPABILITIES: LegacyCapabilitySpec[] = [
   { cap: 'omni', label: 'ZexAPI / Omni', keyField: 'omniApiKey', defaultBaseUrl: 'https://zexapi.com' },
   { cap: 'omniZeroFall', label: 'ZeroFall Omni', keyField: 'omniZeroFallApiKey', defaultBaseUrl: 'https://llm.zerofall.top' },
   { cap: 'omniApimart', label: 'APIMart', keyField: 'omniApimartApiKey', baseUrlField: 'omniBaseUrl', defaultBaseUrl: 'https://api.apimart.ai' },
+  { cap: 'mediaUpload', label: 'MinIO 媒体上传', keyField: 'mediaUploadApiKey', baseUrlField: 'mediaUploadEndpoint', defaultBaseUrl: '' },
 ];
 
 /** 聊天 provider 的内置默认请求地址（与 ProviderSettings 的 KNOWN_PROVIDERS 对齐）。 */
@@ -191,6 +192,17 @@ export function migrateLegacyCredentials(state: CredentialHostState): Credential
     if (!hasId(credentialRefs.cos)) credentialRefs.cos = cred.id;
   }
 
+  // 3b) S3 兼容存储（AccessKeyId + SecretAccessKey 合并为一条凭证，同 COS）
+  const s3AccessKeyId = readKey('s3AccessKeyId');
+  const s3SecretAccessKey = readKey('s3SecretAccessKey');
+  if (s3AccessKeyId && s3SecretAccessKey) {
+    const endpoint = readKey('s3Endpoint').replace(/\/+$/, '');
+    const bucket = readKey('s3Bucket');
+    const baseUrl = endpoint && bucket ? `${endpoint}/${bucket}` : endpoint;
+    const cred = ensureCredential('S3 兼容存储', baseUrl, `${s3AccessKeyId}${COS_SEPARATOR}${s3SecretAccessKey}`);
+    if (!hasId(credentialRefs.s3)) credentialRefs.s3 = cred.id;
+  }
+
   // 4) 生图槽位：给每个带 key 的槽位挂 credentialId（槽位对象保留 apiKey 原值）
   let imageApiSlots = state.imageApiSlots;
   if (Array.isArray(imageApiSlots)) {
@@ -276,6 +288,21 @@ export function resolveCosSecrets(
     return { secretId: combined.slice(0, sep), secretKey: combined.slice(sep + 1) };
   }
   return { secretId: legacySecretId, secretKey: legacySecretKey };
+}
+
+/** S3：优先 's3' 凭证（AccessKeyId:SecretAccessKey 合并存储），回退旧字段对。 */
+export function resolveS3Secrets(
+  state: CredentialHostState,
+  legacyAccessKeyId: string = '',
+  legacySecretAccessKey: string = '',
+): { accessKeyId: string; secretAccessKey: string } {
+  const cred = resolveCredential(state, state.credentialRefs?.s3);
+  const combined = cred?.apiKey ?? '';
+  const sep = combined.indexOf(COS_SEPARATOR);
+  if (sep > 0) {
+    return { accessKeyId: combined.slice(0, sep), secretAccessKey: combined.slice(sep + 1) };
+  }
+  return { accessKeyId: legacyAccessKeyId, secretAccessKey: legacySecretAccessKey };
 }
 
 // ── 引用关系（设置页「被哪些能力引用」展示） ──────────────────────────────────
