@@ -40,7 +40,7 @@ export const imageGenerateTool: Tool = {
     parameters: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: '完整生图提示词' },
+        prompt: { type: 'string', description: '完整生图提示词。非 MJ 模型必须按五维参数框架构建：画面主体与环境置景（空间位置+置景+材质细节）→ 美学调性（类型学标签，禁"唯美/高级感"虚词）→ 视听摄影与光学系统（焦距+光圈+景别+机位+构图，禁只写"特写/远景"）→ 色彩光影（具体物理光源+明暗反差+具体色板，禁"光线柔和"）→ 后期质感（胶片颗粒/电影级调色/真实材质，禁"超高清/神作"）' },
         model: {
           type: 'string',
           description: '可选；省略时使用普通对话底部当前选择的生图模型。内置值：gpt-image-2.5（GPT 生图，图像模型）、seedream-v5-pro、midjourney-v81、midjourney-v82；自定义图片插件用 custom-media:{插件id}（先 media_api_plugin list 查看）',
