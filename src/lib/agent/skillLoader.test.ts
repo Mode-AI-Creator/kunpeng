@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { SkillLoader, type SkillLoaderAdapter } from './skillLoader.ts';
+import { SkillLoader, resolveSkillCatalogId, type SkillLoaderAdapter } from './skillLoader.ts';
 
 function skillMd(name: string, description: string): string {
   return `---\nname: ${name}\ndescription: ${description}\nvisibility: toolbar\n---\nHello {{userContent}}`;
@@ -45,6 +45,16 @@ test('SKILL.md-only entries remain reference skills and cannot be invoked', asyn
   const [skill] = await loader.loadAll();
   assert.equal(skill.invokable, false);
   assert.equal(skill.id, undefined);
+  // …but it still gets a stable UI/preference key so Settings can list it.
+  assert.equal(resolveSkillCatalogId(skill), 'reference');
+});
+
+test('resolveSkillCatalogId hides internal/disabled skills and requires ids for invokable ones', () => {
+  assert.equal(resolveSkillCatalogId({ name: 'a', invokable: true, id: 'a', visibility: 'toolbar' }), 'a');
+  assert.equal(resolveSkillCatalogId({ name: 'a', invokable: true, visibility: 'toolbar' }), null);
+  assert.equal(resolveSkillCatalogId({ name: 'a', invokable: false, visibility: 'internal' }), null);
+  assert.equal(resolveSkillCatalogId({ name: 'a', invokable: false, visibility: 'disabled' }), null);
+  assert.equal(resolveSkillCatalogId({ name: 'a', invokable: false, visibility: 'library' }), 'a');
 });
 
 test('legacy auto skills are exposed as library references immediately', async () => {
@@ -99,4 +109,12 @@ test('UI catalog and skill_invoke use the shared agent loader instead of indepen
   assert.match(uiLoader, /getSharedSkillLoader/);
   assert.doesNotMatch(uiLoader, /invoke\s*<[^>]*>\s*\(\s*['"]scan_skills_dir/);
   assert.match(invokeTool, /getSharedSkillLoader/);
+});
+
+test('UI projection keeps SKILL.md-only reference skills visible in Settings', () => {
+  const uiLoader = readFileSync(new URL('../skillLoader.ts', import.meta.url), 'utf8');
+  // The projection must key reference skills via resolveSkillCatalogId instead
+  // of dropping every skill without a skill.json id.
+  assert.match(uiLoader, /resolveSkillCatalogId/);
+  assert.doesNotMatch(uiLoader, /!skill\.invokable\s*\|\|/);
 });

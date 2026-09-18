@@ -88,14 +88,17 @@ import {
   normalizeLocalMediaPath,
 } from '@/lib/agent/mediaInput';
 import { isImageMediaPath, isVideoMediaPath } from '@/lib/agent/mediaKind';
-import { uploadVideoToKimi, type KimiVideoUploadProgress } from '@/lib/agent/kimiFiles';
+import { KIMI_FILE_VIDEO_MAX_BYTES, KIMI_INLINE_VIDEO_MAX_BYTES, uploadVideoToKimi, type KimiVideoUploadProgress } from '@/lib/agent/kimiFiles';
 import { normalizeRunProgress } from '@/lib/agent/runStepPresentation';
 import { buildChatRouteStrategy, getPrimaryRouteSelection } from '@/lib/agent/routeStrategy';
 import { CoalescedIdleWork } from '@/lib/performance/coalescedIdleWork';
 import {
   DshBridge,
+  buildSkillCatalogUpdateNote,
   deepseekBuiltinRoute,
+  diffSkillCatalog,
   shouldFallbackHarnessToBuiltin,
+  skillCatalogSignature,
 } from '@/lib/agent/dsh';
 
 async function invokeWithStartupTimeout<T>(
@@ -217,9 +220,6 @@ async function buildDshMediaBlocks(filePaths: string[]): Promise<AgentUserConten
   }
   return blocks;
 }
-
-const KIMI_INLINE_VIDEO_MAX_BYTES = 12 * 1024 * 1024;
-const KIMI_FILE_VIDEO_MAX_BYTES = 100 * 1024 * 1024;
 
 interface KimiMediaBuildResult {
   blocks: AgentUserContentBlock[];
@@ -651,6 +651,10 @@ export function useAgent(options?: { primary?: boolean }) {
   // call sites (e.g. abort/switchCwd) keep working.
   const coordinatorsRef = useRef<Map<string, AgentCoordinator>>(new Map());
   const dshBridgesRef = useRef<Map<string, DshBridge>>(new Map());
+  /** Skill catalog snapshot baked into each live Harness bridge's persona.
+   * The ACP process cannot rebuild its system prompt mid-run, so follow-up
+   * guidance carries a delta note when the catalog changes. */
+  const dshSkillSigRef = useRef<Map<string, string>>(new Map());
   const activeRunIdsRef = useRef<Map<string, string>>(new Map());
   /** Session locked by the currently in-flight UI run (serialized by
    * sendingRef, so at most one). Read by session-scoped tool getters. */
@@ -1176,6 +1180,7 @@ export function useAgent(options?: { primary?: boolean }) {
         else void bridge.abort();
       }
       dshBridgesRef.current.clear();
+      dshSkillSigRef.current.clear();
       coordinatorsRef.current.clear();
       coordinatorFactoryRef.current = null;
       baseCustomRulesRef.current = undefined;
@@ -1287,11 +1292,23 @@ export function useAgent(options?: { primary?: boolean }) {
         const pathPrefix = filePaths?.length
           ? `[用户补充了以下文件]\n${filePaths.map((path) => `- ${path}`).join('\n')}\n\n`
           : '';
+        // Harness 的 persona（含技能目录）在 ACP 进程启动时固化，存活桥无法
+        // 重建系统提示词。技能目录在任务期间变化时，把增量说明并在这条补充
+        // 里带给模型，避免新技能在会话内"查无此人"。
+        let catalogPrefix = '';
+        const catalogSkills = skillLoaderRef.current?.getAll() ?? [];
+        const nextSig = skillCatalogSignature(catalogSkills);
+        const prevSig = dshSkillSigRef.current.get(currentAgentId);
+        if (prevSig !== undefined) {
+          const diff = diffSkillCatalog(prevSig, nextSig);
+          if (diff) catalogPrefix = `${buildSkillCatalogUpdateNote(diff, catalogSkills)}\n\n`;
+        }
+        dshSkillSigRef.current.set(currentAgentId, nextSig);
         // queueGuidance 返回 false 只有一种情况：bridge 已 abort（运行刚结束）。
         // 此时不能把消息静默丢掉，也不能让它落进已失效的桥——清掉失效桥，
         // 按新任务走正常启动路径。bridge 在 ref 里存在即视为任务存活，
         // 绝不在它活着时并行起第二个 Harness 进程（并行抢同一工具桥）。
-        if (activeDsh.queueGuidance(`${pathPrefix}${displayContent}`)) {
+        if (activeDsh.queueGuidance(`${catalogPrefix}${pathPrefix}${displayContent}`)) {
           const sessionId = useChatStore.getState().currentSessionId;
           addMessage({
             id: randomUUID(),
@@ -1305,6 +1322,7 @@ export function useAgent(options?: { primary?: boolean }) {
         }
         if (dshBridgesRef.current.get(currentAgentId) === activeDsh) {
           dshBridgesRef.current.delete(currentAgentId);
+          dshSkillSigRef.current.delete(currentAgentId);
         }
       }
       if (coordinator.getIsRunning()) {
@@ -1815,7 +1833,11 @@ export function useAgent(options?: { primary?: boolean }) {
       let subagentRunner: SubagentRunner | null = null;
       const registry = coordinator.getToolRegistry();
       const releaseWorkspaceDispatch = bindWorkspaceRunDispatch(runId, content);
-      registry.bindRunContext(runId, { decisionSource, nativeVision: ['deepseek', 'kimi'].includes(primaryRoute.providerId) });
+      registry.bindRunContext(runId, {
+        decisionSource,
+        nativeVision: ['deepseek', 'kimi'].includes(primaryRoute.providerId),
+        nativeVideo: primaryRoute.providerId === 'kimi',
+      });
       if (isOrdinaryChatRun) {
         subagentRunner = new SubagentRunner({
           parentRunId: runId,
@@ -1832,6 +1854,7 @@ export function useAgent(options?: { primary?: boolean }) {
         registry.bindRunContext(runId, {
           decisionSource,
           nativeVision: ['deepseek', 'kimi'].includes(primaryRoute.providerId),
+          nativeVideo: primaryRoute.providerId === 'kimi',
           idempotencyRunId: runId,
           subagentDepth: 0,
           delegate: (request, signal) => subagentRunner!.run(request, signal),
@@ -1871,6 +1894,10 @@ export function useAgent(options?: { primary?: boolean }) {
           useDeepseekHarnessStore.getState().startRun(runId);
           dshBridgesRef.current.set(currentAgentId, bridge);
           registerSharedDshBridge(currentAgentId, bridge);
+          dshSkillSigRef.current.set(
+            currentAgentId,
+            skillCatalogSignature(skillLoaderRef.current?.getAll() ?? []),
+          );
           try {
             const context = await coordinator.buildHarnessTurnContext(finalContent);
             const history = buildDshConversationContext(coordinator.getMessages());
@@ -1968,6 +1995,7 @@ export function useAgent(options?: { primary?: boolean }) {
             useDeepseekHarnessStore.getState().finishRun(runId);
             if (dshBridgesRef.current.get(currentAgentId) === bridge) {
               dshBridgesRef.current.delete(currentAgentId);
+              dshSkillSigRef.current.delete(currentAgentId);
             }
             unregisterSharedDshBridge(currentAgentId, bridge);
           }
@@ -2053,7 +2081,10 @@ export function useAgent(options?: { primary?: boolean }) {
         if (shared === activeDsh) unregisterSharedDshBridge(agentId, activeDsh);
       }
       for (const [agentId, bridge] of dshBridgesRef.current) {
-        if (bridge === activeDsh) dshBridgesRef.current.delete(agentId);
+        if (bridge === activeDsh) {
+          dshBridgesRef.current.delete(agentId);
+          dshSkillSigRef.current.delete(agentId);
+        }
       }
     }
     const c = coordinatorsRef.current.get(targetAgentId)

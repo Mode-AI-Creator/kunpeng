@@ -22,6 +22,19 @@ export interface AgentSkillManifest {
   sourceManifest?: Record<string, unknown>;
 }
 
+/**
+ * Stable UI/preference key for a catalog skill. Invokable skills key off
+ * their skill.json id; SKILL.md-only reference skills fall back to the same
+ * name the prompt policy uses for enable/disable filtering, so a user-written
+ * skill is visible (and toggleable) in Settings even without a skill.json.
+ */
+export function resolveSkillCatalogId(
+  skill: Pick<AgentSkillManifest, 'id' | 'invokable' | 'visibility' | 'name'>,
+): string | null {
+  if (skill.visibility === 'internal' || skill.visibility === 'disabled') return null;
+  return skill.id ?? (skill.invokable ? null : skill.name);
+}
+
 export interface SkillParameter {
   name: string;
   type: 'string' | 'number' | 'boolean' | 'select';

@@ -169,6 +169,12 @@ function SkillCard({ skill, projectId, onNotice }: {
           <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500">
             {skill.source === 'user' ? '用户技能' : '内置技能'}
           </span>
+          {skill.invokable === false && (
+            <span
+              className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700"
+              title="只有 SKILL.md，没有 skill.json；Agent 会按需读取它，但不能通过 skill_invoke 直接调用"
+            >参考型</span>
+          )}
           {isProjectScoped && (
             <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700">仅本项目</span>
           )}

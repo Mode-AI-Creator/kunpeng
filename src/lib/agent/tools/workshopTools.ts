@@ -214,7 +214,7 @@ function sameStringArray(a: unknown, b: unknown): boolean {
 
 function verifyShotPatch(latest: WsShot, patch: Partial<WsShot>): string[] {
   const failures: string[] = [];
-  const arrayFields: Array<keyof WsShot> = ['characterIds', 'propIds', 'sceneImagePaths', 'extraRefImages', 'voiceCharacterIds'];
+  const arrayFields: Array<keyof WsShot> = ['characterIds', 'propIds', 'sceneImagePaths', 'extraRefImages', 'voiceCharacterIds', 'directorPrevisVideoPaths'];
   for (const key of arrayFields) {
     if (key in patch && !sameStringArray(latest[key], patch[key])) failures.push(String(key));
   }
@@ -618,6 +618,7 @@ const getShotRefsTool: Tool = {
         referenceSignature: shotReferenceSignature(shot, data),
         imageReferenceBindings: buildImageRefBindings(shot, data).map(serialize),
         videoReferenceBindings: buildVideoRefBindings(shot, data).map(serialize),
+        directorPrevisVideoPaths: shot.directorPrevisVideoPaths ?? [],
         promptNeedsRefresh: shot.promptNeedsRefresh === true,
       }),
     };
@@ -1437,6 +1438,7 @@ const updateShotRefsTool: Tool = {
 - 删除当前 @图片七：{"shot_no":"05-04","remove_refs":["@图片七"]}
 - 替换当前 @图片七 为角色：{"shot_no":"05-04","replace_ref":"@图片七","to_kind":"character","to_id":"winged_beast_flying_bronze"}
 - 单独指定本镜场景参考图：{"shot_no":"05-04","set_scene_image_paths":["/abs/a.png"]}；传 [] 表示本镜不传场景图；不传表示跟随场景默认图。
+- 挂入白模/预演视频（视频运动参考）：{"shot_no":"05-04","add_previs_video_paths":["/abs/clay.mp4"]}
 
 注意：这个工具改的是实际参考资产，并会按图片路径自动重排 imagePrompt/videoPrompt/storyboardFrames 里的 @图片N。语义内容仍可能需要用 workshop_set_prompts 进一步重写。`,
     parameters: {
@@ -1452,6 +1454,8 @@ const updateShotRefsTool: Tool = {
         set_scene_image_paths: { type: 'array', items: { type: 'string' }, description: '本镜场景参考图路径。[] 表示本镜不传场景图；不传则不修改。' },
         add_extra_ref_images: { type: 'array', items: { type: 'string' } },
         remove_extra_ref_images: { type: 'array', items: { type: 'string' } },
+        add_previs_video_paths: { type: 'array', items: { type: 'string' }, description: '把本地白模/预演视频绝对路径挂到本镜（视频运动参考，不占 @图片N 编号；生成视频时作为参考视频提交）。' },
+        remove_previs_video_paths: { type: 'array', items: { type: 'string' }, description: '按路径移除本镜已挂的白模/预演视频。' },
         remove_refs: { type: 'array', items: { type: 'string' }, description: '按当前 @图片N 删除引用，如 ["@图片七"]。' },
         replace_ref: { type: 'string', description: '要替换的当前引用编号，如 @图片七。' },
         to_kind: { type: 'string', enum: ['character', 'prop', 'scene', 'extra'] },
@@ -1474,6 +1478,7 @@ const updateShotRefsTool: Tool = {
     const charIds = new Set(shot.characterIds ?? []);
     const propIds = new Set(shot.propIds ?? []);
     let sceneImagePaths = shot.sceneImagePaths ? [...shot.sceneImagePaths] : undefined;
+    let previsVideoPaths = shot.directorPrevisVideoPaths ? [...shot.directorPrevisVideoPaths] : undefined;
     const extraRefImages = new Set(shot.extraRefImages ?? []);
     let storyboardBoards = shot.storyboardBoards;
     let colorPaletteId = shot.colorPaletteId;
@@ -1619,6 +1624,19 @@ const updateShotRefsTool: Tool = {
         changed.push('extraRefImages');
       });
 
+      // 白模/预演视频：本地绝对路径，作为视频运动参考（不占 @图片N）。
+      for (const path of uniqStrings(Array.isArray(params.add_previs_video_paths) ? params.add_previs_video_paths : [])) {
+        if (!/\.(mp4|mov|m4v|webm|mkv)$/i.test(path)) {
+          return { success: false, output: '', error: `白模预演参考必须是本地视频文件路径（mp4/mov/webm）：${path}` };
+        }
+        previsVideoPaths = [...new Set([...(previsVideoPaths ?? []), path])];
+        changed.push('directorPrevisVideoPaths');
+      }
+      for (const path of uniqStrings(Array.isArray(params.remove_previs_video_paths) ? params.remove_previs_video_paths : [])) {
+        previsVideoPaths = (previsVideoPaths ?? []).filter((item) => item !== path);
+        changed.push('directorPrevisVideoPaths');
+      }
+
       const bindings = buildShotRefBindings(shot, data);
       const removeRefs = Array.isArray(params.remove_refs) ? params.remove_refs : [];
       for (const ref of removeRefs) {
@@ -1653,6 +1671,7 @@ const updateShotRefsTool: Tool = {
       promptNeedsRefresh: true,
     };
     if (sceneImagePaths !== undefined) patch.sceneImagePaths = sceneImagePaths;
+    if (previsVideoPaths !== undefined) patch.directorPrevisVideoPaths = previsVideoPaths;
     if (storyboardBoards !== shot.storyboardBoards) patch.storyboardBoards = storyboardBoards;
     if (colorPaletteId !== shot.colorPaletteId) patch.colorPaletteId = colorPaletteId;
     // 参考字段有变化时解除"显式清空"锁定：选角按新状态能产出引用的层清掉
@@ -1681,12 +1700,14 @@ const updateShotRefsTool: Tool = {
     const formatRefs = (list: ShotRefBinding[]) => list.map((ref) => `@图片${numToCn(ref.index)}=${ref.label}`).join('；');
     const imageSummary = formatRefs(buildImageRefBindings(latest, refCtx)) || '无图片参考';
     const videoSummary = formatRefs(buildVideoRefBindings(latest, refCtx)) || '无视频参考';
+    const previsList = latest.directorPrevisVideoPaths ?? [];
+    const previsSummary = previsList.length ? `${previsList.length} 个（${previsList.map((p) => p.split(/[\\/]/).pop()).join('、')}）` : '无';
     const unlockNote = unlock
       ? `\n已解除${unlock.unlocked.map((type) => (type === 'image' ? '图片' : '视频')).join('、')}参考层的清空锁定，按当前选角重建参考。`
       : '';
     return {
       success: true,
-      output: `分镜 ${shotNo} 参考资产已更新：${uniqueChanged.join('、')}\n图片参考层：${imageSummary}\n视频参考层：${videoSummary}${warnings.length ? `\n提醒：${warnings.join('；')}` : ''}${unlockNote}\n已按真实图片路径同步重排 @图片N；如画面语义也变了，请继续用 workshop_set_prompts 重写。`,
+      output: `分镜 ${shotNo} 参考资产已更新：${uniqueChanged.join('、')}\n图片参考层：${imageSummary}\n视频参考层：${videoSummary}\n白模预演视频：${previsSummary}${warnings.length ? `\n提醒：${warnings.join('；')}` : ''}${unlockNote}\n已按真实图片路径同步重排 @图片N；如画面语义也变了，请继续用 workshop_set_prompts 重写。`,
     };
   },
 };

@@ -3,6 +3,11 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { randomUUID } from '@/lib/uuid';
 import { getKimiK3Config } from './kimiClient';
 
+/** Videos at or below this size ride the prompt as inline base64 blocks. */
+export const KIMI_INLINE_VIDEO_MAX_BYTES = 12 * 1024 * 1024;
+/** Kimi file service accepts uploads up to this size. */
+export const KIMI_FILE_VIDEO_MAX_BYTES = 100 * 1024 * 1024;
+
 interface KimiUploadEvent {
   uploadId: string;
   loadedBytes: number;

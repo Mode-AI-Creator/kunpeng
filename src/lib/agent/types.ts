@@ -73,6 +73,8 @@ export interface ToolExecutionContext {
   };
   /** Return visual evidence to the active model instead of a separate vision service. */
   nativeVision?: boolean;
+  /** Return video evidence to the active model (Kimi route) instead of an external analysis call. */
+  nativeVideo?: boolean;
   runId?: string;
   /** Parent run namespace used by paid-call idempotency across delegates. */
   idempotencyRunId?: string;

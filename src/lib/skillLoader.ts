@@ -1,6 +1,6 @@
 import type { SkillManifest } from '@/types/skill';
 import { homeDir } from '@tauri-apps/api/path';
-import { getSharedSkillLoader, type AgentSkillManifest } from '@/lib/agent/skillLoader';
+import { getSharedSkillLoader, resolveSkillCatalogId, type AgentSkillManifest } from '@/lib/agent/skillLoader';
 
 // ── 7 Built-in skill fallbacks ──────────────────────────────────────────────
 // These are embedded so the app works even without ~/.kunpeng/skills/
@@ -1564,7 +1564,11 @@ function applyProductMeta(skill: SkillManifest): SkillManifest {
 }
 
 export function projectAgentSkillToUi(skill: AgentSkillManifest): SkillManifest | null {
-  if (!skill.id || !skill.invokable || skill.visibility === 'internal' || skill.visibility === 'disabled') return null;
+  // SKILL.md-only reference skills have no skill.json id. They must still show
+  // up in Settings (keyed by the same name the prompt policy filters on), or
+  // user-written skills stay invisible in the library.
+  const id = resolveSkillCatalogId(skill);
+  if (!id) return null;
   const source = skill.sourceManifest ?? {};
   const sourceVisibility = source.visibility;
   const visibility = sourceVisibility === 'toolbar' || sourceVisibility === 'library' || sourceVisibility === 'internal'
@@ -1572,7 +1576,7 @@ export function projectAgentSkillToUi(skill: AgentSkillManifest): SkillManifest 
     : skill.visibility === 'library' ? 'library' : 'toolbar';
   return applyProductMeta({
     ...source,
-    id: skill.id,
+    id,
     name: typeof source.name === 'string' ? source.name : skill.displayName || skill.name,
     icon: typeof source.icon === 'string' ? source.icon : 'sparkles',
     description: skill.description,

@@ -4,7 +4,7 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, ChevronRight, ChevronUp, Clapperboard, Crosshair, Grid2X2, ImagePlus, LayoutList, Loader2, Maximize2, MessageSquarePlus, MonitorPlay, MoreHorizontal, Palette, Pause, Play, Plus, RefreshCw, RotateCcw, Sparkles, Trash2, Upload, Wand2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, ChevronUp, Boxes, Clapperboard, Crosshair, Grid2X2, ImagePlus, LayoutList, Loader2, Maximize2, MessageSquarePlus, MonitorPlay, MoreHorizontal, Palette, Pause, Play, Plus, RefreshCw, RotateCcw, Sparkles, Trash2, Upload, Wand2, X } from 'lucide-react';
 import { convertFileSrc } from '@tauri-apps/api/tauri';
 import { copyFile, createDir, BaseDirectory } from '@tauri-apps/api/fs';
 import { homeDir } from '@tauri-apps/api/path';
@@ -25,7 +25,7 @@ import {
 } from '@/lib/workshop/shotRefs';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { nanoid } from 'nanoid';
-import { buildShotPromptsPrompt, buildOptimizeShotPrompt, buildAudioPromptsPrompt, buildBatchAudioPromptsPrompt } from '@/lib/workshop/workshopPrompts';
+import { buildShotPromptsPrompt, buildOptimizeShotPrompt, buildAudioPromptsPrompt, buildBatchAudioPromptsPrompt, buildClayPrevizPrompt } from '@/lib/workshop/workshopPrompts';
 import { dispatchWorkshopPrompt } from '../WorkshopChatPanel';
 import { buildStyleSection } from '../StyleSelector';
 import { syncShotPromptsToCanvas, pullFromCanvas } from '@/lib/workshop/canvasSync';
@@ -2404,7 +2404,7 @@ ${currentPrompts}
               }}
               className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--canvas-node-border)] px-3 text-[11px] text-[var(--canvas-text-2)] hover:text-[var(--canvas-text-1)]"
             >
-              <Clapperboard size={12} /> 白模预演
+              <Clapperboard size={12} /> 导演台
             </button>
             <button onClick={onClose} className="p-1.5 rounded-lg text-[var(--canvas-text-3)] hover:text-[var(--canvas-text-1)] hover:bg-[rgba(255,255,255,0.06)]">
               <X size={16} />
@@ -3605,14 +3605,22 @@ const ShotRows = memo(function ShotRows({ shot, isOpen, onToggle, onPatch: onPat
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
+                    onClick={() => dispatchWorkshopPrompt(buildClayPrevizPrompt(shot.shotNo))}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] text-[var(--canvas-text-2)] border border-[var(--canvas-node-border)] hover:text-[var(--canvas-text-1)] transition-colors"
+                    title="让鲲鹏用 Blender 按这一镜生成白模运镜视频，完成后可注入为本镜参考"
+                  >
+                    <Boxes size={10} /> 白模预演
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       const projectId = useWorkshopStore.getState().project?.id;
                       if (projectId) openWorkshopDirector(shot, characters, projectId, 'video-prompt');
                     }}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] text-[var(--canvas-text-2)] border border-[var(--canvas-node-border)] hover:text-[var(--canvas-text-1)] transition-colors"
-                    title="按已有分镜图或画面描述建立白模机位"
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] text-[var(--canvas-text-3)] border border-[var(--canvas-node-border)] hover:text-[var(--canvas-text-1)] hover:border-[var(--canvas-node-border-selected)] transition-colors"
+                    title="打开导演台，按已有分镜图或画面描述手动搭建白模机位"
                   >
-                    <Clapperboard size={10} /> 白模预演
+                    <Clapperboard size={10} /> 导演台
                   </button>
                   <button
                     type="button"

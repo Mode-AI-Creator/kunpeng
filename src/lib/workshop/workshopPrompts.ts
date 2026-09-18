@@ -150,6 +150,19 @@ videoPrompt：先读取项目和本镜 videoPromptTemplate。经典版按 aigc-m
 调用 workshop_set_prompts 时必须传 expectedRefSignature。保持与前后镜头的画风、光线、角色形象连贯。完成后简述改了什么。`;
 }
 
+/** 单条分镜白模预演（Blender clay previz）：渲染 → 询问注入 → 按白模改提示词 */
+export function buildClayPrevizPrompt(shotNo: string): string {
+  return `请为工坊分镜 ${shotNo} 制作 Blender 白模运镜预演视频。严格按技能 ~/.kunpeng/skills/blender-clay-previz/SKILL.md 执行（先读取它），流程：
+
+1. 读取事实：workshop_get_state（detail:"step", section:"prompts", shot_no:"${shotNo}"）+ workshop_get_shot_refs，拿到该镜 description、dialogue、videoPrompt、人物/场景/道具资产与项目画幅。白模只表达空间关系：场景布局、人物站位与移动、相机路径、动作交接时机；不要做纹理细节。
+2. 推导 spec：按技能规范把该镜翻译成 spec.json——元素全部用方块/圆柱概括（汽车等特殊物体摆大概形状即可），人物档位按动作复杂度选（站位/粗略移动=detail 1，特定姿态=detail 2），相机 path 对齐 videoPrompt 的运镜设计，时长默认 5 秒（该镜明显需要更长可调整），画幅跟随项目。只有关键信息缺失（该镜描述空到无法推断场景或动作）才用 ask_user_question 问我，能推断就不要问。
+3. 渲染与验证：探测 Blender、headless 渲染、ffmpeg 抽首/中/尾帧逐帧目检（构图是否还原、遮挡关系、相机不穿墙不切人、动作时机在正确的帧），失败改 spec 重渲。成品与 spec.json 放工作区 videos/ 目录。
+4. 注入确认：验证通过后，用 ask_user_question 问我「是否把这条白模视频注入为分镜 ${shotNo} 的白模参考视频？」（选项：注入 / 不注入）。
+5. 我选「注入」后：workshop_update_shot_refs（{"shot_no":"${shotNo}","add_previs_video_paths":["成品绝对路径"]}），重新 workshop_get_shot_refs 确认 directorPrevisVideoPaths 已写入并拿到新 referenceSignature；然后重写该镜 videoPrompt 并 workshop_set_prompts（传 expectedRefSignature）：开头明确「@视频N（白模预演视频）只参考空间调度、视角顺序、人物相对位置与动作交接节点，不参考外观与材质」，并把运镜与动作描述对齐白模的实际调度；人物与场景外观仍以 @图片N 资产为准，其余写作标准不变。我选「不注入」就只交付视频文件链接，不改任何提示词与参考。
+
+纪律：本地 Blender 渲染不产生 API 费用；本任务禁止调用任何生图/生视频付费工具；完成后简述白模内容（场景、人数、运镜）与是否已注入。`;
+}
+
 /** 单条分镜 AI 写配音提示词 */
 export function buildAudioPromptsPrompt(shotNo: string): string {
   return `请为工坊分镜 ${shotNo} 编写台词配音提示词（audioPrompts）：

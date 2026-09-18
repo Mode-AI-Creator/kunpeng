@@ -197,6 +197,7 @@ import { webFetchTool } from './tools/webFetchTool';
 import { webSearchTool } from './tools/webSearchTool';
 import { browserControlTool, browserInstallTool } from './tools/browserTool';
 import { visionTool } from './tools/visionTool';
+import { videoUnderstandingTool } from './tools/videoUnderstandingTool';
 import { capabilityApiConfigTool } from './tools/capabilityApiConfigTool';
 import { mediaApiPluginTool } from './tools/mediaApiPluginTool';
 import { sleepTool, scheduleCronTool } from './tools/scheduleCronTool';
@@ -234,6 +235,7 @@ export function createDefaultRegistry(): ToolRegistry {
   registry.register(browserControlTool);
   registry.register(browserInstallTool);
   registry.register(visionTool);
+  registry.register(videoUnderstandingTool);
   registry.register(capabilityApiConfigTool);
   registry.register(mediaApiPluginTool);
   registry.register(sleepTool);
