@@ -19,6 +19,7 @@ test('workspace exposes dedicated GPT/MJ/Seedance25 routes without adding them t
   const seedance = workspaceEngine('dreamina-seedance-2.5')!;
   assert.equal(seedance.params.find((param) => param.key === 'duration')!.options!.length, 27);
   assert.deepEqual(seedance.params.find((param) => param.key === 'resolution')!.options, ['480p', '720p']);
+  assert.deepEqual(seedance.params.find((param) => param.key === 'genMode')!.options, ['全能参考', '首帧', '首尾帧']);
 });
 
 test('workspace displayed defaults are frozen in drafts and requests without overwriting explicit parameters or stored history', () => {

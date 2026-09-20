@@ -70,6 +70,7 @@ import {
   DREAMINA_SEEDANCE_25_ENDPOINT,
   DREAMINA_SEEDANCE_25_ENGINE_ID,
   generateSeedance25WithDreamina,
+  normalizedGenMode,
 } from '@/lib/dreamina/video';
 import {
   chooseGptImageChannel,
@@ -2884,9 +2885,15 @@ async function runStandardGeneration(req: CoreGenRequest): Promise<CoreGenResult
 }
 
 async function runDreaminaSeedance25Generation(req: CoreGenRequest): Promise<CoreGenResult> {
-  const refs = req.referenceUrls ?? [];
-  const audioUrls = req.audioUrls ?? [];
-  const videoUrls = req.videoUrls ?? [];
+  // 首帧/首尾帧模式：只取前 1/2 张图作首/尾帧；CLI 的 image2video/frames2video
+  // 不接受视频/音频输入，这些参考在本模式下一律剥离。
+  const genMode = normalizedGenMode(String(req.params?.genMode ?? ''));
+  const allRefs = req.referenceUrls ?? [];
+  const refs = genMode === 'first-frame' ? allRefs.slice(0, 1)
+    : genMode === 'first-last-frame' ? allRefs.slice(0, 2)
+    : allRefs;
+  const audioUrls = genMode === 'multimodal' ? (req.audioUrls ?? []) : [];
+  const videoUrls = genMode === 'multimodal' ? (req.videoUrls ?? []) : [];
   const taskId = useCanvasTaskStore.getState().addTask({
     nodeId: req.nodeId ?? '',
     kind: 'video',
@@ -2930,6 +2937,7 @@ async function runDreaminaSeedance25Generation(req: CoreGenRequest): Promise<Cor
       duration: Number(req.params?.duration ?? 5),
       ratio: String(req.params?.ratio ?? req.params?.aspectRatio ?? '16:9'),
       resolution: String(req.params?.resolution ?? '720p'),
+      genMode,
       signal: ac.signal,
       taskContext: [
         req.workshopShotNo ? `工坊镜号 ${req.workshopShotNo}` : '',
@@ -3010,9 +3018,18 @@ async function runDreaminaSeedance25Generation(req: CoreGenRequest): Promise<Cor
 }
 
 async function runKuaiziSeedanceGeneration(req: CoreGenRequest): Promise<CoreGenResult> {
-  const refs = req.referenceUrls ?? [];
+  let refs = req.referenceUrls ?? [];
   const kuaiziMode = mapSeedanceToKuaiziMode(req.engineId);
-  const imageRoles = mapSeedanceToKuaiziImageRoles(req.engineId, refs.length);
+  let imageRoles = mapSeedanceToKuaiziImageRoles(req.engineId, refs.length);
+  // 即梦 2.5 的首帧/首尾帧模式（genMode 参数）：裁剪参考、强制帧角色，
+  // 比例改 adaptive——筷子 2.5 首帧/首尾帧任务仅支持 ratio=adaptive，
+  // 创建时即被同步拒绝其他值。
+  const genMode = normalizedGenMode(String(req.params?.genMode ?? ''));
+  if (kuaiziMode === 'seedance2.5' && genMode !== 'multimodal') {
+    refs = refs.slice(0, genMode === 'first-frame' ? 1 : 2);
+    imageRoles = refs.map((_, i) => (genMode === 'first-last-frame' && i === 1) ? 'last_frame' : 'first_frame');
+    req = { ...req, params: { ...(req.params ?? {}), ratio: 'adaptive' }, videoUrls: [], audioUrls: [] };
+  }
   // 用 engine 声明的参数默认值预填（与 RHTV 路径一致）——曾经跳过这步，
   // 同一引擎两条后端的 ratio/duration 默认行为不一致（RHTV adaptive vs 筷子 16:9）
   const engineDef = findCanvasEngine(req.engineId);

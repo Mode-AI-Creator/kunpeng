@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { FolderOpen, Image as ImageIcon, Library, Mic, Package, SlidersHorizontal, Sparkles, Video, X } from 'lucide-react';
+import { Boxes, FolderOpen, Image as ImageIcon, Library, Mic, Package, SlidersHorizontal, Sparkles, Video, X } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/api/dialog';
 import type { WorkshopData } from '@/lib/workshop/types';
 import type { WorkspaceDraft, WorkspaceReference } from '@/lib/workspace/types';
@@ -44,6 +44,8 @@ interface Props {
   onProductionTools?: (objectId: string) => void;
   /** 分镜提示词的 agent 通道（读剧本/分镜/调度写回）：optimize=按剧本优化，write=按剧本从零编写。 */
   onAgentPrompt?: (draft: WorkspaceDraft, mode: 'write' | 'optimize', template?: 'legacy' | 'universal') => void;
+  /** 分镜白模预演的 agent 通道（Blender clay previz → 询问注入 → 改提示词）。 */
+  onClayPreviz?: (draft: WorkspaceDraft) => void;
   /** 单素材传入画布（待整理区） */
   onSendToCanvas?: (objectId: string, mediaId: string) => void;
   /** Resolve an uncertain submission after the user checked the original task, unblocking regeneration. */
@@ -227,6 +229,11 @@ export default function WorkspaceMediaPanel(props: Props) {
       title="调用项目助手按剧本、拆解与调度编写本镜提示词"
       onClick={() => props.onAgentPrompt!(cloneWorkspaceDraft(draft), 'write')}>
       <Sparkles size={14} />按剧本生成提示词
+    </button>}
+    {selected.kind === 'shot' && props.onClayPreviz && <button className="workspace-production-entry"
+      title="让鲲鹏用 Blender 按这一镜生成白模运镜视频，完成后可注入为本镜参考"
+      onClick={() => props.onClayPreviz!(cloneWorkspaceDraft(draft))}>
+      <Boxes size={14} />白模预演
     </button>}
     </div>
     <div className="workspace-media-panel-inspector">{pending?.status === 'uncertain' && props.onResolveSubmission && <div className="workspace-submission-resolve" role="alert">

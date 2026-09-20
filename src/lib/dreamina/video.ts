@@ -38,10 +38,20 @@ export interface DreaminaSeedance25Request {
   duration?: number;
   ratio?: string;
   resolution?: string;
+  /** 生成模式：全能参考（默认）/ 首帧 / 首尾帧（兼容 first-frame / first-last-frame / image2video / frames2video 写法）。 */
+  genMode?: string;
   signal?: AbortSignal;
   onProgress?: (progress: string) => void;
   onSubmitted?: (submitId: string) => void;
   taskContext?: string;
+}
+
+/** 生成模式归一化：全能参考=multimodal2video，首帧=image2video，首尾帧=frames2video。 */
+export function normalizedGenMode(value?: string): 'multimodal' | 'first-frame' | 'first-last-frame' {
+  const v = String(value ?? '').trim();
+  if (['首帧', 'first-frame', 'image2video'].includes(v)) return 'first-frame';
+  if (['首尾帧', 'first-last-frame', 'frames2video'].includes(v)) return 'first-last-frame';
+  return 'multimodal';
 }
 
 export interface DreaminaSeedance25Result {
@@ -179,28 +189,67 @@ export async function generateSeedance25WithDreamina(
   const images = request.imageUrls ?? [];
   const videos = request.videoUrls ?? [];
   const audios = request.audioUrls ?? [];
-  if (images.length > 30) throw new Error(`Seedance 2.5 最多支持 30 张参考图，当前 ${images.length} 张`);
-  if (videos.length > 10) throw new Error(`Seedance 2.5 最多支持 10 个参考视频，当前 ${videos.length} 个`);
-  if (audios.length > 10) throw new Error(`Seedance 2.5 最多支持 10 个参考音频，当前 ${audios.length} 个`);
-  if (images.length + videos.length + audios.length > 50) throw new Error('Seedance 2.5 参考素材总数不能超过 50 个');
+  const genMode = normalizedGenMode(request.genMode);
+  if (genMode === 'first-frame' && images.length < 1) {
+    throw new Error('Seedance 2.5 首帧模式需要 1 张首帧参考图，请在参考中加入图片');
+  }
+  if (genMode === 'first-last-frame' && images.length < 2) {
+    throw new Error(`Seedance 2.5 首尾帧模式需要 2 张参考图（首帧 + 尾帧），当前只有 ${images.length} 张`);
+  }
+  if (genMode === 'multimodal') {
+    if (images.length > 30) throw new Error(`Seedance 2.5 最多支持 30 张参考图，当前 ${images.length} 张`);
+    if (videos.length > 10) throw new Error(`Seedance 2.5 最多支持 10 个参考视频，当前 ${videos.length} 个`);
+    if (audios.length > 10) throw new Error(`Seedance 2.5 最多支持 10 个参考音频，当前 ${audios.length} 个`);
+    if (images.length + videos.length + audios.length > 50) throw new Error('Seedance 2.5 参考素材总数不能超过 50 个');
+  }
 
   const materializedImages = await Promise.all(images.map((url, index) => materializeMedia(url, 'image', index, tempDir)));
-  const materializedVideos = await Promise.all(videos.map((url, index) => materializeMedia(url, 'video', index, tempDir)));
-  const materializedAudios = await Promise.all(audios.map((url, index) => materializeMedia(url, 'audio', index, tempDir)));
+  const materializedVideos = genMode === 'multimodal'
+    ? await Promise.all(videos.map((url, index) => materializeMedia(url, 'video', index, tempDir)))
+    : [];
+  const materializedAudios = genMode === 'multimodal'
+    ? await Promise.all(audios.map((url, index) => materializeMedia(url, 'audio', index, tempDir)))
+    : [];
   const allMaterialized = [...materializedImages, ...materializedVideos, ...materializedAudios];
   const duration = Math.min(30, Math.max(4, Math.round(request.duration || 5)));
-  const args = [
-    'multimodal2video',
-    `--prompt=${request.prompt}`,
-    '--model_version=seedance2.5',
-    `--duration=${duration}`,
-    `--ratio=${normalizedRatio(request.ratio)}`,
-    `--video_resolution=${normalizedResolution(request.resolution)}`,
-    '--poll=2',
-  ];
-  materializedImages.forEach((item) => args.push(`--image=${item.path}`));
-  materializedVideos.forEach((item) => args.push(`--video=${item.path}`));
-  materializedAudios.forEach((item) => args.push(`--audio=${item.path}`));
+  // seedance2.5 的 image2video/frames2video 输出跟随首帧，CLI 拒绝显式
+  // --ratio（官方 1.4.18 起）。全能参考模式才传比例。
+  const args = genMode === 'first-frame'
+    ? [
+      'image2video',
+      `--prompt=${request.prompt}`,
+      '--model_version=seedance2.5',
+      `--duration=${duration}`,
+      `--video_resolution=${normalizedResolution(request.resolution)}`,
+      '--poll=2',
+    ]
+    : genMode === 'first-last-frame'
+      ? [
+        'frames2video',
+        `--prompt=${request.prompt}`,
+        '--model_version=seedance2.5',
+        `--duration=${duration}`,
+        `--video_resolution=${normalizedResolution(request.resolution)}`,
+        '--poll=2',
+      ]
+      : [
+        'multimodal2video',
+        `--prompt=${request.prompt}`,
+        '--model_version=seedance2.5',
+        `--duration=${duration}`,
+        `--ratio=${normalizedRatio(request.ratio)}`,
+        `--video_resolution=${normalizedResolution(request.resolution)}`,
+        '--poll=2',
+      ];
+  if (genMode === 'first-frame') {
+    args.push(`--image=${materializedImages[0].path}`);
+  } else if (genMode === 'first-last-frame') {
+    args.push(`--first=${materializedImages[0].path}`, `--last=${materializedImages[1].path}`);
+  } else {
+    materializedImages.forEach((item) => args.push(`--image=${item.path}`));
+    materializedVideos.forEach((item) => args.push(`--video=${item.path}`));
+    materializedAudios.forEach((item) => args.push(`--audio=${item.path}`));
+  }
 
   try {
     request.onProgress?.('提交即梦 Seedance 2.5…');

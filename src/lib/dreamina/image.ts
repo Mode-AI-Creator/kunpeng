@@ -182,7 +182,10 @@ function normalizedRatio(value?: string): string {
 
 function normalizedResolution(value?: string): string {
   const resolution = String(value || '2k').toLowerCase();
-  return ['1k', '2k', '4k'].includes(resolution) ? resolution : '2k';
+  // CLI 的 5.0Pro 只接受 1.5k/2k/4k（1.4.18 起严格校验直接拒绝）；
+  // 引擎选项里的 1k 是其他供应商档位，映射到即梦的 1.5k。
+  if (resolution === '1k' || resolution === '1.5k') return '1.5k';
+  return ['2k', '4k'].includes(resolution) ? resolution : '2k';
 }
 
 function resultPaths(response: DreaminaResponse): string[] {

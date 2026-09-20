@@ -46,7 +46,7 @@ import { PROFESSIONAL_DRAFT_REQUEST_EVENT, professionalDraftRequest } from '@/li
 import { workspaceMediaVersions } from '@/lib/workspace/mediaView';
 import { projectAssistantQueue } from '@/stores/projectAssistantQueueStore';
 import type { AssistantTarget } from '@/lib/workspace/projectAssistantQueue';
-import { buildAutoRunPrompt, buildExportPrompt, buildOptimizeShotPrompt, buildShotPromptsPrompt } from '@/lib/workshop/workshopPrompts';
+import { buildAutoRunPrompt, buildExportPrompt, buildOptimizeShotPrompt, buildShotPromptsPrompt, buildClayPrevizPrompt } from '@/lib/workshop/workshopPrompts';
 import { autoLoadWorkspaceToCanvas, sendMediaToCanvas } from '@/lib/workshop/canvasSync';
 
 const WorkspaceEditor = lazy(() => import('@/components/workspace/WorkspaceEditorSurface'));
@@ -286,6 +286,15 @@ export default function ProjectWorkspace(props: Props) {
             enqueueProjectAction(mode === 'write' ? 'AI 写分镜提示词' : 'AI 优化提示词',
               `[媒体工作台上下文：${JSON.stringify({ project_id: data.projectId, operation: 'shot-prompts', shot_no: shot.shotNo })}]\n当前为用户从分镜 ${shot.shotNo} 明确发起的提示词${mode === 'write' ? '编写' : '优化'}任务；经 workshop_get_state / workshop_get_shot_refs 读取剧本事实与真实参考顺序，写入用 workshop_set_prompts。`,
               lead + buildOptimizeShotPrompt(shot.shotNo));
+          }}
+          onClayPreviz={(draft) => {
+            if (!ownsProject()) return;
+            const owner = data.projectObjects?.objects.find((item) => item.id === draft.objectId);
+            const shot = data.shots.find((item) => (item.id ?? item.shotNo) === owner?.sourceId);
+            if (!shot) return;
+            enqueueProjectAction('白模预演',
+              `[媒体工作台上下文：${JSON.stringify({ project_id: data.projectId, operation: 'shot-prompts', shot_no: shot.shotNo })}]\n当前为用户从分镜 ${shot.shotNo} 明确发起的白模预演任务；经 workshop_get_state / workshop_get_shot_refs 读取剧本事实与真实参考顺序，注入用 workshop_update_shot_refs（add_previs_video_paths），写入提示词用 workshop_set_prompts。`,
+              buildClayPrevizPrompt(shot.shotNo));
           }}
           onViewState={patchView} onAddToChat={(id, mediaId) => addToChat([id], mediaId)}
           onEditToChat={(objectId, mediaId) => {

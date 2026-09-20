@@ -25,6 +25,7 @@ export const WORKSPACE_ENGINES: RhtvCanvasEngine[] = [
   { id: 'dreamina-seedance-2.5', label: 'Seedance 2.5', endpoint: '', kind: 'video', mode: 'multimodal-video',
     imageParam: { key: 'imageUrls', multiple: true }, videoParam: { key: 'videoUrls', multiple: true }, audioParam: { key: 'audioUrls', multiple: true },
     params: [
+      { key: 'genMode', label: '生成模式', type: 'list', default: '全能参考', options: ['全能参考', '首帧', '首尾帧'] },
       { key: 'ratio', label: '比例', type: 'list', default: '16:9', options: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
       { key: 'duration', label: '时长', type: 'list', default: '5', options: Array.from({ length: 27 }, (_, i) => String(i + 4)) },
       { key: 'resolution', label: '分辨率', type: 'list', default: '480p', options: ['480p', '720p'] },

@@ -63,6 +63,7 @@ At a high level:
 - Use `text2video` for prompt-only video generation.
 - Use `image2video` when one main image is enough.
 - Use `frames2video` for first-and-last-frame driven video generation.
+- For `seedance2.5` with `image2video` or `frames2video`, omit `--ratio`: reference-frame output follows the first frame and the CLI rejects an explicit ratio.
 - Use `multiframe2video` for Dreamina's fixed-model, image-only intelligent multi-frame flow: multiple images in, one coherent story video out. This command does not expose model selection.
 - Use `multimodal2video` for Dreamina's flagship video mode when the task needs all-around references across images, video, and audio, or when a Seedance 2.5 multi-image request needs model selection. If the legacy name `ref2video` appears, trust `dreamina -h` for the current command surface.
 
