@@ -1183,14 +1183,14 @@ const setBiblesTool: Tool = {
     description: `写入项目四圣经：导演圣经、角色圣经、场景圣经、连续性圣经。
 用于剧本拆解完成后，把全项目必须继承的镜头/光影/角色/场景/连续性规则固化下来。
 后续资产提示词、分镜提示词、Seedance 视频提示词都必须继承这些规则。
-不要把单镜临时创意写进四圣经；只写跨全片稳定生效的约束。
+不要把单镜临时创意写进四圣经；只写跨全片稳定生效的约束。未确认的创意不升级为既定事实；局部修改只传变化字段，数组更新须保留仍有效的既有规则。设定变化会通过现有步骤状态提示下游需复核，不会自动重做素材。
 continuity.blockingContinuity 专门记录每一幕/每一场景的世界空间站位基准和剧情触发的走位递进：场景锚点、人物相对位置/朝向/距离、180度轴线、出入口、上一状态→触发动作→下一状态。不要只写“画面左/右”，因为换机位后屏幕方位会变化。`,
     parameters: {
       type: 'object',
       properties: {
         bibles: {
           type: 'object',
-          description: 'WorkshopProjectBibles 对象，可包含 director/character/scene/continuity 四段。每段必须带 updatedAt（毫秒时间戳）；没有则工具自动补齐。',
+          description: '局部更新对象，可包含 director/character/scene/continuity；未传类别及字段保持原样。数组字段传入时整体替换，先读取已有内容再合并；[] 表示明确清空该列表，null 不合法。更新时间由系统维护。',
         },
       },
       required: ['bibles'],
@@ -1200,16 +1200,14 @@ continuity.blockingContinuity 专门记录每一幕/每一场景的世界空间�
   async execute(params) {
     const check = requireOpen();
     if (!check.ok) return { success: false, output: '', error: check.error };
-    const now = Date.now();
-    const incoming = params.bibles as WorkshopProjectBibles;
-    const bibles: WorkshopProjectBibles = {
-      director: incoming.director ? { ...incoming.director, updatedAt: incoming.director.updatedAt || now } : undefined,
-      character: incoming.character ? { ...incoming.character, updatedAt: incoming.character.updatedAt || now } : undefined,
-      scene: incoming.scene ? { ...incoming.scene, updatedAt: incoming.scene.updatedAt || now } : undefined,
-      continuity: incoming.continuity ? { ...incoming.continuity, updatedAt: incoming.continuity.updatedAt || now } : undefined,
-    };
     const store = useWorkshopStore.getState();
-    store.setBibles(bibles);
+    try {
+      store.setBibles(params.bibles as WorkshopProjectBibles);
+    } catch (error) {
+      return { success: false, output: '', error: error instanceof Error ? error.message : String(error) };
+    }
+    // Persist the merged state, never the partial request.
+    const bibles = useWorkshopStore.getState().data?.bibles ?? {};
     const projectId = store.project?.id;
     if (projectId) {
       await writeProjectFile(projectId, 'bibles/index.json', JSON.stringify(bibles, null, 2));

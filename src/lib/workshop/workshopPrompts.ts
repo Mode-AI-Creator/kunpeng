@@ -63,6 +63,9 @@ export function buildAssetPromptsPrompt(styleSection = ''): string {
 
 1. 先 workshop_get_state（detail:"step"）查看角色/场景档案——**注意每个资产的 assetEngine 字段，引擎决定提示词语言和格式**：
    - 若 bibles 已存在，资产提示词必须继承 director/character/scene/continuity 里的稳定规则
+   - 后台区分不可随意改变的身份特征、剧情阶段的服装/年龄状态和本次可变的表情/姿态；局部修改只改变用户指定项。参考风格不复制其人物、服装和道具，已有定版资产优先于新猜测。
+   - 场景保持已有空间锚点、材质和主光关系；机位变化不改变房间布局。道具保持已有形状、尺寸关系及剧情用途，不为丰富画面添加影响剧情的物件。
+   - 继续使用现有资产字段和角色三视图格式；不增加新资产类别、表单或逐项确认流程。
 
 【GPT-Image-2.5】（默认引擎，GPT 生图 = 图像模型 gpt-image-2.5；勿与视频模型 Seedance 2.5 混淆）→ **中文段落式**，参考结构：
    - **角色 = 三视图组合图（固定格式）**：「${WORKSHOP_CHARACTER_TEMPLATE_ZH}」

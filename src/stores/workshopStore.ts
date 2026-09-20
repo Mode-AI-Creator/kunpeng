@@ -6,6 +6,7 @@
  * 镜头/单资产生成通过工作台草稿、确认队列调用 canvasGen，结果只进候选。
  * 场景多角度也逐项准备可见草稿，不另开付费执行器或复制产物。
  */
+import { patchWorkshopBibles, type WorkshopBiblePatch } from '@/lib/workshop/bibleUpdates';
 import { create } from 'zustand';
 import { useUnifiedProjectStore } from './unifiedProjectStore';
 import { editWorkspaceProjectTemplate, editWorkspaceProjectVideoSettings } from '@/lib/workspace/shotEdits';
@@ -34,7 +35,6 @@ import {
   type WorkshopAssetKind,
   type WorkshopStepId,
   type WsCharacter,
-  type WorkshopProjectBibles,
   type WsColorPalette,
   type WsProp,
   type WsScene,
@@ -430,7 +430,7 @@ interface WorkshopState {
   setCharacterVoice: (characterId: string, voicePath: string, source: 'upload' | 'canvas' | 'tts') => void;
   removeCharacterVoice: (characterId: string) => void;
   setStyle: (style: WorkshopData['style']) => void;
-  setBibles: (bibles: WorkshopProjectBibles) => void;
+  setBibles: (bibles: WorkshopBiblePatch) => void;
   /** 设置全局视频比例（分镜未单独设置时 fallback） */
   setVideoRatio: (ratio: string) => void;
   /** 设置全局视频模型（分镜未单独设置时 fallback） */
@@ -1194,7 +1194,9 @@ export const useWorkshopStore = create<WorkshopState>((set, get, api) => ({
   setBibles: (bibles) => {
     const { data } = get();
     if (!data) return;
-    set({ data: { ...data, bibles } });
+    const next = patchWorkshopBibles(data, bibles);
+    if (next === data) return;
+    set({ data: next });
     get().logChange('breakdown', '更新项目四圣经');
   },
 
