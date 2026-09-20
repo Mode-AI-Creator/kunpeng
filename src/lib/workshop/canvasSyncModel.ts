@@ -38,6 +38,9 @@ export function applySelectedProjectVersion(
     path: string;
     mediaType: 'image' | 'video' | 'audio' | 'document' | 'unknown';
   },
+  // 展示槽 URL 必须经 convertFileSrc 转换；localPath 保留裸路径。默认恒等
+  // 保持纯模型可测，生产调用方（unifiedProjectStore）注入转换器。
+  displayPath: (path: string) => string = (path) => path,
 ): Node[] {
   return nodes.map((node) => {
     const data = node.data as Record<string, unknown> | undefined;
@@ -45,12 +48,13 @@ export function applySelectedProjectVersion(
     if (node.type !== input.mediaType) return node;
     // Candidate/history nodes are immutable media views, not an owner's current-version slot.
     if (data.mediaObjectId && data.mediaPurpose !== 'current-version') return node;
+    const display = displayPath(input.path);
     const mediaPatch = input.mediaType === 'video'
-      ? { generatedVideoUrl: input.path, localPath: input.path }
+      ? { generatedVideoUrl: display, localPath: input.path }
       : input.mediaType === 'image'
-        ? { generatedImageUrl: input.path, localPath: input.path }
+        ? { generatedImageUrl: display, localPath: input.path }
         : input.mediaType === 'audio'
-          ? { audioUrl: input.path, localPath: input.path }
+          ? { audioUrl: display, localPath: input.path }
           : {};
     return {
       ...node,

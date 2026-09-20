@@ -13,7 +13,20 @@
  */
 import { readBinaryFile } from '@tauri-apps/api/fs';
 import { fetch as tauriFetch, ResponseType } from '@tauri-apps/api/http';
+import { convertFileSrc } from '@tauri-apps/api/tauri';
 import { stripDriveLeadingSlash } from '@/lib/platform';
+
+/**
+ * 展示用 URL 归一化：历史数据里存在未经 convertFileSrc 转换的裸绝对路径
+ * （如 applySelectedProjectVersion 旧版本的写入），<img>/<audio> 直接吃这种
+ * src 在 webview 里必然裂图。渲染层统一过一遍：裸路径 → asset URL，其余原样。
+ */
+export function toCanvasDisplayUrl(url: string): string {
+  if (!url) return url;
+  if (/^(https?:|data:|asset:|ms:|blob:)/i.test(url)) return url;
+  if (url.startsWith('/') || /^[A-Za-z]:[\\/]/.test(url)) return convertFileSrc(url);
+  return url;
+}
 
 /** asset URL / 绝对路径 → 本地绝对路径；解不出来返回 null。 */
 export function assetUrlToLocalPath(url: string): string | null {

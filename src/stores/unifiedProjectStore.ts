@@ -18,6 +18,7 @@ import {
 } from '@/lib/projectObjects/selectors';
 import { stableProjectObjectId } from '@/lib/projectObjects/migrate';
 import { selectProjectVersionCommand, deleteProjectObjectCommand, type ProjectCommandState } from '@/lib/projectObjects/projectCommands';
+import { convertFileSrc } from '@tauri-apps/api/tauri';
 import { useCanvasStore } from './canvasStore';
 import {
   applyProjectObjectPatch,
@@ -252,7 +253,8 @@ export const useUnifiedProjectStore = create<UnifiedProjectState>()(persist((set
     if (!ws.data) return false;
     const canvas = useCanvasStore.getState();
     const base = { workshop: ws.data, canvas: { nodes: canvas.nodes, edges: canvas.edges } };
-    const next = selectProjectVersionCommand(base, ownerObjectId, versionObjectId);
+    const next = selectProjectVersionCommand(base, ownerObjectId, versionObjectId, Date.now(),
+      (path) => (/^(https?:|data:|asset:)/.test(path) ? path : convertFileSrc(path)));
     return Boolean(next && publishProjectCommand(base, next));
   },
 

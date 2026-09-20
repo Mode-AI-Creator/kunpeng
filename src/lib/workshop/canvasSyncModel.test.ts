@@ -71,3 +71,18 @@ test('version projection updates linked canvas media without moving nodes or tou
   assert.deepEqual(result[0].position, { x: 120, y: 80 });
   assert.equal(result[1], nodes[1]);
 });
+
+test('version projection converts display URLs while keeping localPath raw', () => {
+  const nodes = [node('linked', { projectObjectId: 'character:a', generatedImageUrl: '/v1.png' })];
+  const result = applySelectedProjectVersion(nodes, {
+    ownerObjectId: 'character:a',
+    mediaObjectId: 'media:v2',
+    versionObjectId: 'version:v2',
+    path: '/Users/x/.kunpeng/workspace/images/v2.png',
+    mediaType: 'image',
+  }, (path) => (/^(https?:|data:|asset:)/.test(path) ? path : `asset://localhost${path}`));
+
+  const data = result[0].data as Record<string, unknown>;
+  assert.equal(data.generatedImageUrl, 'asset://localhost/Users/x/.kunpeng/workspace/images/v2.png');
+  assert.equal(data.localPath, '/Users/x/.kunpeng/workspace/images/v2.png');
+});

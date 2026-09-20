@@ -18,6 +18,7 @@ export function selectProjectVersionCommand(
   ownerObjectId: string,
   versionObjectId: string,
   now = Date.now(),
+  displayPath: (path: string) => string = (path) => path,
 ): ProjectCommandState | null {
   const workshop = selectAssetVersion(state.workshop, ownerObjectId, versionObjectId, now);
   if (workshop === state.workshop) return null;
@@ -26,7 +27,7 @@ export function selectProjectVersionCommand(
   if (!version || !media) return null;
   const projectedNodes = applySelectedProjectVersion(state.canvas.nodes, {
     ownerObjectId, versionObjectId, mediaObjectId: media.id, path: media.path, mediaType: media.mediaType,
-  });
+  }, displayPath);
   // Old onConnect cached an edge's image in referenceImages too. Drop that
   // duplicate when the edge source changes version; otherwise both versions submit.
   const changedSources = new Map(state.canvas.nodes.flatMap((node, index) => {

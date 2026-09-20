@@ -1550,7 +1550,7 @@ const PRODUCT_META: Record<string, Partial<SkillManifest>> = {
   'sketch-to-image': { category: 'storyboard', visibility: 'toolbar' },
   'dreamina-video': { category: 'integration', visibility: 'library' },
   'geography-video-effects': { category: 'visual', visibility: 'toolbar', name: '地理视觉' },
-  'car-commercial-storyboard': { category: 'visual', visibility: 'toolbar', name: '汽车视觉制作', description: '统一完成汽车定妆、广告视觉与电影分镜' },
+  'car-commercial-storyboard': { category: 'visual', visibility: 'toolbar', name: '汽车视觉制作', description: '汽车资产三视图/细节图、TVC 路跑画面与汽车题材分镜' },
   'video-copy-analyzer': { category: 'internal', visibility: 'internal' },
   'car-model-skill': { category: 'internal', visibility: 'internal' },
   'digital-human-skill': { category: 'internal', visibility: 'internal' },

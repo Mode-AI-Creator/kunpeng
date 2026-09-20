@@ -16,6 +16,7 @@ import { invoke } from '@tauri-apps/api/tauri';
 import type { AudioNodeData } from '@/types/canvas';
 import type { WorkshopRef } from '@/lib/workshop/canvasSync';
 import { assetUrlToLocalPath } from '@/lib/rhtv/upload';
+import { toCanvasDisplayUrl } from '@/lib/canvas/imageSource';
 import { openCanvasNodeInAgent } from '@/lib/canvas/nodeAgent';
 import { useHasMultiNodeSelection } from '../NodeToolbarPortal';
 import { copyTextToClipboard, resolveCopyableMediaUrl } from '@/lib/canvas/copyMediaLink';
@@ -224,7 +225,7 @@ function AudioNodeComponent({ id, data, selected }: NodeProps<AudioNodeData>) {
             <>
               {/* nodrag nopan：阻止 ReactFlow 接管原生音频控件的指针事件，
                   避免点播放后鼠标被拖拽逻辑"咬住"无法移出节点。 */}
-              <audio src={data.audioUrl} controls className="nodrag nopan w-full h-9 shrink-0" preload="none" />
+              <audio src={toCanvasDisplayUrl(data.audioUrl)} controls className="nodrag nopan w-full h-9 shrink-0" preload="none" />
             </>
           ) : (data as Record<string, unknown>).isGenerating ? (
             <div className="h-12 flex items-center justify-center text-[10px] text-[var(--canvas-text-2)]">

@@ -7,6 +7,7 @@ import { useCanvasTaskStore } from '@/stores/canvasTaskStore';
 import type { ImageNodeData } from '@/types/canvas';
 import { open as openDialog } from '@tauri-apps/api/dialog';
 import { convertFileSrc } from '@tauri-apps/api/tauri';
+import { toCanvasDisplayUrl } from '@/lib/canvas/imageSource';
 import ImageNodeToolbar from '../ImageNodeToolbar';
 import ProgressRing from './ProgressRing';
 import NodeParamBadge from './NodeParamBadge';
@@ -36,7 +37,22 @@ function ImageNodeComponent({ id, data, selected }: NodeProps<ImageNodeData>) {
   const updateNode = useCanvasStore((s) => s.updateNode);
   const isGenerating = data.isGenerating || false;
   const isI2I = data.generationMode === 'image-to-image';
-  const displayUrl = data.generatedImageUrl || data.referenceImage || '';  // filter falsy
+  // 历史数据里存在未转换的裸绝对路径（旧版版本采用写入），渲染层归一化；
+  // URL 全空但有 localPath 时用它兜底展示。
+  const rawDisplayUrl = data.generatedImageUrl || data.referenceImage || '';
+  const normalizedUrl = rawDisplayUrl
+    ? toCanvasDisplayUrl(rawDisplayUrl)
+    : (data.localPath ? convertFileSrc(data.localPath) : '');
+  const [src, setSrc] = useState(normalizedUrl);
+  const [loadFailed, setLoadFailed] = useState(false);
+  useEffect(() => { setSrc(normalizedUrl); setLoadFailed(false); }, [normalizedUrl]);
+  const displayUrl = src;  // filter falsy
+  const handleImgError = () => {
+    // 当前 src 失败：先试 localPath 直转，仍失败才显示占位（不留裂图图标）。
+    const fallback = data.localPath ? convertFileSrc(data.localPath) : '';
+    if (fallback && fallback !== src) setSrc(fallback);
+    else setLoadFailed(true);
+  };
   // In-place progress from the task queue (rhtv chain).
   const activeTask = useCanvasTaskStore((s) => {
     const t = [...s.tasks].reverse().find((x) => x.nodeId === id && ACTIVE.includes(x.status));
@@ -112,11 +128,18 @@ function ImageNodeComponent({ id, data, selected }: NodeProps<ImageNodeData>) {
         }`}
         style={{ width: '100%', height: '100%', minHeight: displayUrl ? 160 : 150, background: 'var(--canvas-node-bg)', border: `1px solid ${selected ? 'transparent' : 'var(--canvas-node-border)'}` }}
       >
-        {displayUrl && !isGenerating ? (
-          <img src={displayUrl} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover block" />
+        {displayUrl && loadFailed && !isGenerating ? (
+          <div className="flex items-center justify-center w-full h-full min-h-[160px]">
+            <div className="text-center px-4">
+              <ImageIcon size={24} className="text-[var(--canvas-text-3)] mx-auto" />
+              <div className="text-[10px] text-[var(--canvas-text-3)] mt-2">图片无法显示，文件可能已被移动或删除</div>
+            </div>
+          </div>
+        ) : displayUrl && !isGenerating ? (
+          <img src={displayUrl} alt="" loading="lazy" decoding="async" onError={handleImgError} className="w-full h-full object-cover block" />
         ) : displayUrl && isGenerating ? (
           <div className="relative w-full h-full min-h-[160px]">
-            <img src={displayUrl} alt="" loading="lazy" decoding="async" className="absolute inset-0 w-full h-full object-cover opacity-40 block" />
+            <img src={displayUrl} alt="" loading="lazy" decoding="async" onError={handleImgError} className="absolute inset-0 w-full h-full object-cover opacity-40 block" />
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="flex flex-col items-center gap-1.5">
                 {activeTask
