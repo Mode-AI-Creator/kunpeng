@@ -18,6 +18,20 @@ test('delegate request validates task, groups and timeout bounds', () => {
   assert.equal(normalizeDelegateRequest({ task: 'x', timeout_sec: -3 }).timeoutSec, 1);
 });
 
+test('delegate request accepts known personas and rejects unknown ones', () => {
+  assert.equal(normalizeDelegateRequest({ task: '写剧本', persona: 'showrunner' }).persona, 'showrunner');
+  assert.equal(normalizeDelegateRequest({ task: 'x', persona: 'nonexistent' }).persona, undefined);
+  assert.equal(normalizeDelegateRequest({ task: 'x' }).persona, undefined);
+});
+
+test('agent_delegate definition advertises personas for creative delegation', () => {
+  assert.match(agentDelegateTool.definition.description, /showrunner/);
+  const personaParam = (agentDelegateTool.definition.parameters as {
+    properties: Record<string, { enum?: string[] }>;
+  }).properties.persona;
+  assert.deepEqual(personaParam?.enum, ['showrunner']);
+});
+
 test('subagent depth guard prevents recursive delegation even with a delegate callback', async () => {
   let called = false;
   const result = await agentDelegateTool.execute({ task: 'nested' }, undefined, {

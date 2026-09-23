@@ -47,6 +47,8 @@ export interface AgentDelegateRequest {
   context?: string;
   toolGroups?: string[];
   timeoutSec?: number;
+  /** 专业子代理角色：注入该角色的专属创作规范（如 showrunner 制片人）。 */
+  persona?: string;
 }
 
 export interface AgentDelegateResult {

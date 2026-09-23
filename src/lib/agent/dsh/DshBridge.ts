@@ -13,6 +13,8 @@ export class DshBridge {
   private visibleOutput = false;
   private aborted = false;
   private callbacksRef: DshRunOptions['callbacks'] | null = null;
+  private sessionId: string | null = null;
+  private sessionResumed = false;
 
   getIsRunning(): boolean {
     return this.running;
@@ -20,6 +22,16 @@ export class DshBridge {
 
   hasVisibleOutput(): boolean {
     return this.visibleOutput;
+  }
+
+  /** 本轮 ACP 会话 id——成功与失败轮都可用（失败轮供下轮 resume 磁盘恢复）。 */
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  /** 本轮是否恢复了上一轮会话（true 时调用方应跳过历史文本回放）。 */
+  didResumeSession(): boolean {
+    return this.sessionResumed;
   }
 
   queueGuidance(text: string, media: AgentUserContentBlock[] = []): boolean {
@@ -107,7 +119,7 @@ export class DshBridge {
         this.visibleOutput = true;
       },
     );
-    this.acp = new DshAcpClient(options, instanceId, onUpdate);
+    this.acp = new DshAcpClient(options, instanceId, onUpdate, options.resumeSessionId);
     const abort = () => void this.abort();
     options.signal?.addEventListener('abort', abort, { once: true });
     try {
@@ -117,12 +129,15 @@ export class DshBridge {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`DeepSeek Harness 工具桥初始化失败: ${message}`);
       }
+      let sessionInfo: { sessionId: string; resumed: boolean };
       try {
-        await this.acp.start();
+        sessionInfo = await this.acp.start();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`DeepSeek Harness ACP 启动失败: ${message}`);
       }
+      this.sessionId = sessionInfo.sessionId;
+      this.sessionResumed = sessionInfo.resumed;
       let response = await this.acp.prompt(options.input, options.mediaBlocks);
       stopReason = response.stopReason;
       while (this.queuedGuidance.length > 0 && !options.signal?.aborted) {
@@ -136,7 +151,14 @@ export class DshBridge {
       const finalText = currentMessage.trim() ? currentMessage : text;
       if (!finalText.trim()) throw new Error('DeepSeek Harness 已结束任务，但没有返回可展示的回复');
       options.callbacks.onContextUsage?.({ estimatedTokens: usage.used, maxTokens: usage.size });
-      return { text: finalText, thinking, visibleOutput: this.visibleOutput, stopReason };
+      return {
+        text: finalText,
+        thinking,
+        visibleOutput: this.visibleOutput,
+        stopReason,
+        sessionId: sessionInfo.sessionId,
+        resumed: sessionInfo.resumed,
+      };
     } finally {
       options.signal?.removeEventListener('abort', abort);
       await this.dispose();

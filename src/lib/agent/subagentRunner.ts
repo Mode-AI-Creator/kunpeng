@@ -19,6 +19,8 @@ export interface SubagentCoordinatorFactoryArgs {
   idempotencyRunId: string;
   maxTurns: number;
   subagentDepth: 1;
+  /** 专业角色（如 showrunner）：工厂据此给子代理注入专属规则。 */
+  persona?: string;
 }
 
 export type SubagentCoordinatorFactory = (args: SubagentCoordinatorFactoryArgs) => SubagentCoordinator;
@@ -71,10 +73,14 @@ export function isSubagentToolAllowed(name: string, requestedGroups?: string[]):
 }
 
 export function buildSubagentHandoff(request: AgentDelegateRequest): string {
+  const personaNote = request.persona
+    ? `\n[专业角色] 你以「${request.persona}」专业角色的规范执行本任务（专属规范已在你的系统规则中）。`
+    : '';
   return [
     '[子代理任务]',
     request.task,
     request.context ? `\n[交接上下文]\n${request.context}` : '',
+    personaNote,
     '\n[执行边界]\n独立完成这项任务；不要向用户追问，不要再次委派。只报告可验证结论和产物路径。',
   ].filter(Boolean).join('\n');
 }
@@ -171,6 +177,7 @@ export class SubagentRunner {
       idempotencyRunId: this.options.parentRunId,
       maxTurns: this.options.maxTurns,
       subagentDepth: 1,
+      ...(request.persona ? { persona: request.persona } : {}),
     });
     if (controller.signal.aborted) coordinator.abort();
     const active = makeActiveChild(coordinator, controller, resolveInterruption);

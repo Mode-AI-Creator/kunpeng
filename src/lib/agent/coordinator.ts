@@ -1332,7 +1332,11 @@ export class AgentCoordinator {
     parentAbortController: AbortController,
     idempotencyRunId: string,
     maxTurns = 20,
+    personaRules?: string,
   ): AgentCoordinator {
+    const customRules = personaRules?.trim()
+      ? [this.config.customRules, personaRules.trim()].filter(Boolean).join('\n\n')
+      : this.config.customRules;
     return new AgentCoordinator({
       glmClient: this.config.glmClient,
       toolRegistry: registry,
@@ -1344,7 +1348,7 @@ export class AgentCoordinator {
       skillDescriptionResolver: this.config.skillDescriptionResolver,
       skillNoticeResolver: this.config.skillNoticeResolver,
       workspace: this.config.workspace,
-      customRules: this.config.customRules,
+      customRules,
       parentAbortController,
       routeStrategy: this.config.routeStrategy,
       requestSource: 'background',

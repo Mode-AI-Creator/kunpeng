@@ -417,6 +417,8 @@ fn main() {
             dsh::dsh_tool_respond,
             dsh::dsh_start,
             dsh::dsh_send,
+            dsh::dsh_sidecar_call,
+            dsh::dsh_list_sessions,
             dsh::dsh_stop,
             stream_proxy::stream_http_request,
             stream_proxy::abort_stream_request,

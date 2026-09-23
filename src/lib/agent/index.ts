@@ -4,7 +4,7 @@ export { AgentCoordinator, repairToolPairingSnapshot, type CoordinatorConfig } f
 export { ToolRegistry, createDefaultRegistry } from './toolRegistry';
 export { SkillLoader, getSharedSkillLoader, type AgentSkillManifest, type SkillLoaderAdapter } from './skillLoader';
 export { buildSystemPrompt } from './systemPrompt';
-export { executeCommand } from './commands/index';
+export { executeCommand, getAllCommands } from './commands/index';
 export { createBackgroundTaskTool } from './tools/backgroundTaskTool';
 export { createTodoWriteTool } from './tools/todoWriteTool';
 export { McpManager, MCP_SERVERS } from './mcp';

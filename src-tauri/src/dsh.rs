@@ -13,8 +13,9 @@ use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio::time::{timeout, Duration};
 
 const DSH_VERSION: &str = "0.1.5-rc.1";
-const DSH_RUNTIME_REVISION: &str = "0.1.5-rc.1-kunpeng.1";
+const DSH_RUNTIME_REVISION: &str = "0.1.5-rc.1-kunpeng.2";
 const DSH_EVENT_PREFIX: &str = "__KUNPENG_DSH_EVENT__";
+const SIDECAR_PORT_PREFIX: &str = "__KUNPENG_SIDECAR__";
 
 #[derive(Clone)]
 struct BridgeInfo {
@@ -27,6 +28,8 @@ struct DshProcess {
     child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
     temp_dir: PathBuf,
+    /// Host sidecar 端口（__KUNPENG_SIDECAR__ stderr 行上报；None = 未上报）。
+    sidecar_port: Mutex<Option<u16>>,
 }
 
 struct DshInner {
@@ -509,6 +512,121 @@ pub async fn dsh_set_tools(
     Ok(())
 }
 
+/// 持久化 DSH 会话清单（/resume 命令用）：扫描 sessions 目录，
+/// 只读每个会话文件的首行 meta（id/createdAt/cwd），按最后活动排序。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshSessionSummary {
+    pub session_id: String,
+    pub cwd: String,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub size_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn dsh_list_sessions() -> Result<Vec<DshSessionSummary>, String> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<Vec<DshSessionSummary>, String> {
+        let home = dirs::home_dir().ok_or_else(|| "无法定位用户目录".to_string())?;
+        let root = home.join(".kunpeng").join("dsh").join("sessions");
+        let mut summaries: Vec<DshSessionSummary> = Vec::new();
+        let entries = match std::fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(summaries),
+        };
+        for encoded_dir in entries.flatten() {
+            let sessions_dir = encoded_dir.path();
+            let session_dirs = match std::fs::read_dir(&sessions_dir) {
+                Ok(dirs) => dirs,
+                Err(_) => continue,
+            };
+            for session_dir in session_dirs.flatten() {
+                let file = session_dir.path().join("session.v3.jsonl");
+                let Ok(meta) = std::fs::metadata(&file) else { continue };
+                // 首行是 session meta（id/createdAt/cwd）；文件可能很大，
+                // 只读首行，控制在几十字节级别。
+                let Ok(mut handle) = std::fs::File::open(&file) else { continue };
+                use std::io::BufRead as _;
+                let mut first_line = String::new();
+                if std::io::BufReader::new(&mut handle).read_line(&mut first_line).is_err() {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<Value>(&first_line) else { continue };
+                let (Some(id), Some(cwd)) = (
+                    value.get("id").and_then(Value::as_str),
+                    value.get("cwd").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                let updated_at_ms = meta
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_millis() as u64)
+                    .unwrap_or(0);
+                summaries.push(DshSessionSummary {
+                    session_id: id.to_string(),
+                    cwd: cwd.to_string(),
+                    created_at_ms: value
+                        .get("createdAt")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    updated_at_ms,
+                    size_bytes: meta.len(),
+                });
+            }
+        }
+        summaries.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+        summaries.truncate(12);
+        Ok(summaries)
+    })
+    .await
+    .map_err(|error| format!("扫描会话目录失败: {}", error))?
+}
+
+/// 调用目标 Harness 进程的 sidecar 命令通道（当前支持手动压缩）。
+/// 端口由 host 通过 __KUNPENG_SIDECAR__ stderr 行上报。
+#[tauri::command]
+pub async fn dsh_sidecar_call(
+    state: tauri::State<'_, DshState>,
+    run_id: String,
+    payload: Value,
+) -> Result<Value, String> {
+    let port = {
+        let processes = state.inner.processes.lock().await;
+        let process = processes
+            .get(&run_id)
+            .ok_or_else(|| "Harness 进程已退出".to_string())?;
+        let port = process.sidecar_port.lock().await;
+        (*port).ok_or_else(|| "Harness sidecar 尚未就绪（端口未上报）".to_string())?
+    };
+    // compactNow 在 sidecar 内有 10 分钟 AbortSignal 兜底；这里 11 分钟
+    // 硬超时防止 host 挂死时前端 invoke 永久阻塞。
+    let call = async {
+        let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .map_err(|error| format!("连接 Harness sidecar 失败: {}", error))?;
+        let (reader, mut writer) = tokio::io::split(stream);
+        let line = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
+        writer
+            .write_all(format!("{}\n", line).as_bytes())
+            .await
+            .map_err(|error| format!("发送 sidecar 命令失败: {}", error))?;
+        writer.shutdown().await.map_err(|error| error.to_string())?;
+        let mut lines = tokio::io::BufReader::new(reader).lines();
+        match lines.next_line().await {
+            Ok(Some(response)) => {
+                serde_json::from_str::<Value>(&response).map_err(|error| format!("sidecar 响应解析失败: {}", error))
+            }
+            Ok(None) => Err("sidecar 在响应前关闭了连接".to_string()),
+            Err(error) => Err(format!("读取 sidecar 响应失败: {}", error)),
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(11 * 60), call)
+        .await
+        .map_err(|_| "sidecar 调用超时（11 分钟）".to_string())?
+}
+
 #[tauri::command]
 pub async fn dsh_tool_respond(
     state: tauri::State<'_, DshState>,
@@ -834,6 +952,19 @@ pub async fn dsh_start(
                     continue;
                 }
             }
+            // Sidecar 端口上报：记入进程条目，供 dsh_sidecar_call 使用。
+            if let Some(raw_port) = line.strip_prefix(SIDECAR_PORT_PREFIX) {
+                if let Ok(port) = serde_json::from_str::<Value>(raw_port) {
+                    if let Some(port) = port.get("port").and_then(Value::as_u64) {
+                        let state = stderr_app.state::<DshState>();
+                        let mut processes = state.inner.processes.lock().await;
+                        if let Some(process) = processes.get_mut(&stderr_run) {
+                            *process.sidecar_port.lock().await = Some(port as u16);
+                        }
+                    }
+                }
+                continue;
+            }
             // DSH diagnostics must never carry credentials into the WebView.
             let redacted = line.replace(&stderr_secret, "[REDACTED]");
             let lower = redacted.to_ascii_lowercase();
@@ -873,6 +1004,7 @@ pub async fn dsh_start(
                 child,
                 stdin: Arc::new(Mutex::new(stdin)),
                 temp_dir,
+                sidecar_port: Mutex::new(None),
             },
         );
         old
@@ -998,6 +1130,26 @@ impl DshState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_summary_serializes_camel_case_for_the_acp_wire() {
+        // 前端 DshSessionSummaryDto 按 camelCase 取值（sessionId/cwd/...）；
+        // serde 默认 snake_case 会把字段变成 undefined 并炸掉 /resume 渲染。
+        let value = serde_json::to_value(DshSessionSummary {
+            session_id: "session-x".into(),
+            cwd: "/ws/2026-09-21".into(),
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            size_bytes: 3,
+        })
+        .expect("serialize summary");
+        assert_eq!(value.get("sessionId").and_then(serde_json::Value::as_str), Some("session-x"));
+        assert_eq!(value.get("cwd").and_then(serde_json::Value::as_str), Some("/ws/2026-09-21"));
+        assert_eq!(value.get("createdAtMs").and_then(serde_json::Value::as_u64), Some(1));
+        assert_eq!(value.get("updatedAtMs").and_then(serde_json::Value::as_u64), Some(2));
+        assert_eq!(value.get("sizeBytes").and_then(serde_json::Value::as_u64), Some(3));
+        assert!(value.get("session_id").is_none());
+    }
 
     #[test]
     fn pending_tool_key_isolates_same_run_id_across_instances() {

@@ -19,6 +19,9 @@ import {
 } from '@/lib/historyPersistence';
 import { safeLocalStorage } from '@/lib/safeStorage';
 import { stripHarnessPrefix } from '@/lib/agent/harnessDisplay';
+import { harnessSessionRegistry } from '@/lib/agent/dsh/harnessSession.ts';
+
+const dropHarnessSession = (sessionId: string) => harnessSessionRegistry.drop(sessionId);
 
 // ── Local session persistence ───────────────────────────────────────────
 const SESSIONS_LS_KEY = 'kunpeng-sessions';
@@ -349,6 +352,10 @@ export function useSessions() {
       if (bareUuid !== sessionId) {
         useSettingsStore.getState().addDeletedSessionId(bareUuid);
       }
+
+      // 聊天会话删除后，其 DSH 会话复用记录一并作废（resume 目标消失，
+      // 下次同 id 新会话自然回到 fresh + 文本回放）。
+      dropHarnessSession(sessionId);
 
       // Remove from store
       useChatStore.getState().removeSession(sessionId);

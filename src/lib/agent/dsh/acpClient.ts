@@ -9,7 +9,17 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timeout: number;
+  /** 静默超时续期（仅 session/prompt）：重新武装计时器，返回新句柄。 */
+  rearm?: () => number;
 }
+
+/**
+ * session/prompt 的静默超时窗口。一轮 agent 任务可以合法运行数小时
+ * （串联多个 toolCallTimeoutMs=30 分钟的付费工具调用），因此不设墙钟
+ * 上限，只有「完全没有通道活动」达到该窗口才判死。窗口必须大于单个
+ * 工具调用上限（30 分钟），为静默的长思考留出缓冲。
+ */
+const PROMPT_INACTIVITY_MS = 45 * 60 * 1000;
 
 export interface AcpUpdate {
   sessionId: string;
@@ -36,20 +46,28 @@ export class DshAcpClient {
     private readonly options: DshStartOptions,
     private readonly instanceId: string,
     private readonly onUpdate: (update: AcpUpdate) => void,
+    private readonly resumeSessionId?: string,
   ) {}
 
-  async start(): Promise<void> {
-    if (this.started) return;
+  /** 本轮已建立的 ACP 会话 id（失败轮也保留，供下轮 resume 磁盘恢复）。 */
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  async start(): Promise<{ sessionId: string; resumed: boolean }> {
+    if (this.started) throw new Error('DeepSeek Harness ACP 客户端已启动');
     this.unlisten.push(await listen<DshAcpLineEvent>('dsh-acp-line', ({ payload }) => {
       if (payload.runId !== this.options.runId || payload.instanceId !== this.instanceId) return;
       this.handleLine(payload.line);
     }));
     this.unlisten.push(await listen<DshHarnessEvent>('dsh-harness-event', ({ payload }) => {
       if (payload.runId !== this.options.runId || payload.instanceId !== this.instanceId || !payload.event || this.closed) return;
+      this.touchActivity();
       this.onUpdate({ sessionId: this.sessionId || '', update: payload.event });
     }));
     this.unlisten.push(await listen<DshAcpLineEvent>('dsh-acp-stderr', ({ payload }) => {
       if (payload.runId !== this.options.runId || payload.instanceId !== this.instanceId) return;
+      this.touchActivity();
       this.stderr = `${this.stderr}\n${payload.line}`.trim().slice(-5000);
     }));
     this.unlisten.push(await listen<DshAcpLineEvent>('dsh-acp-closed', ({ payload }) => {
@@ -64,12 +82,31 @@ export class DshAcpClient {
       clientCapabilities: {},
       clientInfo: { name: 'kunpeng', version: '1.0.0' },
     });
+    if (this.resumeSessionId) {
+      try {
+        // wire 契约：成功返回 { configOptions }，sessionId 即请求传入值
+        // （上游原样恢复该会话）；任何失败以 JSON-RPC error 形式抛出。
+        await this.request('session/resume', {
+          sessionId: this.resumeSessionId,
+          cwd: this.options.workspace,
+          mcpServers: [],
+        });
+        this.sessionId = this.resumeSessionId;
+        return { sessionId: this.sessionId, resumed: true };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // resume 失败（会话不存在 / cwd 不匹配 / 中断态不可恢复等）不是
+        // 致命错误：降级为新会话，文本回放兜底由调用方负责。
+        agentLog.warn('DSH', `session/resume 降级为新会话: ${message}`);
+      }
+    }
     const session = await this.request('session/new', {
       cwd: this.options.workspace,
       mcpServers: [],
     }) as { sessionId?: string };
     if (!session?.sessionId) throw new Error('DeepSeek Harness 未返回 ACP sessionId');
     this.sessionId = session.sessionId;
+    return { sessionId: this.sessionId, resumed: false };
   }
 
   async prompt(text: string, mediaBlocks: AgentUserContentBlock[] = []): Promise<{ stopReason?: string }> {
@@ -107,17 +144,21 @@ export class DshAcpClient {
     // 30-minute timeout. Fail synchronously with the already-redacted stderr.
     if (this.channelError) throw this.channelError;
     const id = this.nextId++;
-    // Startup handshake must fail fast (a hung composition would otherwise
-    // burn the whole 30-minute budget before the user sees anything), while a
-    // prompt legitimately outlives it: one turn can chain several long paid
-    // tool calls, each allowed up to toolCallTimeoutMs (30 min) upstream.
-    const timeoutMs = method === 'session/prompt' ? 60 * 60 * 1000 : 90 * 1000;
+    // 一次性握手类请求 90 秒固定超时；session/prompt 是一整轮 agent 任务
+    // （可以串联多个长付费工具调用），不能按墙钟掐断——改为静默超时：
+    // 期间任何 ACP 通道活动（模型输出分片、工具事件、host stderr）都会
+    // 续期，只有连续 PROMPT_INACTIVITY_MS 无声才中止。
+    const isPrompt = method === 'session/prompt';
+    const timeoutMs = isPrompt ? PROMPT_INACTIVITY_MS : 90 * 1000;
     const promise = new Promise<unknown>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
+      const arm = () => window.setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`DeepSeek Harness ACP 请求超时: ${method}`));
+        reject(new Error(isPrompt
+          ? `DeepSeek Harness 会话轮次已中止：连续 ${Math.round(PROMPT_INACTIVITY_MS / 60000)} 分钟没有任何模型输出或工具活动`
+          : `DeepSeek Harness ACP 请求超时: ${method}`));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timeout });
+      const timeout = arm();
+      this.pending.set(id, { resolve, reject, timeout, rearm: isPrompt ? arm : undefined });
     });
     try {
       await this.send({ jsonrpc: '2.0', id, method, params });
@@ -147,6 +188,7 @@ export class DshAcpClient {
 
   private handleLine(line: string): void {
     if (this.closed) return;
+    this.touchActivity();
     let message: Record<string, unknown>;
     try {
       message = JSON.parse(line) as Record<string, unknown>;
@@ -185,6 +227,15 @@ export class DshAcpClient {
           ? { outcome: { outcome: 'selected', optionId: selected.optionId } }
           : { outcome: { outcome: 'cancelled' } },
       });
+    }
+  }
+
+  /** 任何 ACP 通道活动都证明 host 存活：为静默超时中的请求续期。 */
+  private touchActivity(): void {
+    for (const pending of this.pending.values()) {
+      if (!pending.rearm) continue;
+      window.clearTimeout(pending.timeout);
+      pending.timeout = pending.rearm();
     }
   }
 

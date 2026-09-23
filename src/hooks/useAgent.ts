@@ -10,6 +10,7 @@ import {
   createBackgroundTaskTool,
   createTodoWriteTool,
   executeCommand,
+  getAllCommands,
   McpManager,
   MCP_SERVERS,
   repairToolPairingSnapshot,
@@ -65,6 +66,7 @@ import { useDeepseekHarnessStore } from '@/stores/deepseekHarnessStore';
 import { useTodoStore } from '@/stores/todoStore';
 import type { AigcProject } from '@/lib/aigc/projectStore';
 import type { Message } from '@/types';
+import { SUBAGENT_PERSONA_METAS, type SubagentPersona } from '@/types/agent';
 import { randomUUID } from '@/lib/uuid';
 import {
   ensureActiveConversationSessionRaw,
@@ -94,12 +96,27 @@ import { buildChatRouteStrategy, getPrimaryRouteSelection } from '@/lib/agent/ro
 import { CoalescedIdleWork } from '@/lib/performance/coalescedIdleWork';
 import {
   DshBridge,
+  buildCompletedStepsRunNotice,
+  buildHarnessFailureRecord,
   buildSkillCatalogUpdateNote,
+  collectHarnessTurnProgress,
   deepseekBuiltinRoute,
   diffSkillCatalog,
+  isAbortError,
+  shouldContinueWithBuiltin,
   shouldFallbackHarnessToBuiltin,
   skillCatalogSignature,
 } from '@/lib/agent/dsh';
+import { harnessSessionRegistry, resolveHarnessSessionPlan } from '@/lib/agent/dsh/harnessSession.ts';
+import {
+  buildGoalPrefix,
+  buildPlanModePrefix,
+  compactDshSession,
+  formatDshSessionList,
+  listDshSessions,
+  slashCommandState,
+} from '@/lib/agent/dsh/slashCommandState.ts';
+import { formatSlashHelpText, isUnknownSlashCommandName, parseSlashCommand, parseSlashCommandName, type ExtraCommandSpec, type SlashCommandMatch } from '@/lib/agent/dsh/slashCommands.ts';
 
 async function invokeWithStartupTimeout<T>(
   command: string,
@@ -741,6 +758,7 @@ export function useAgent(options?: { primary?: boolean }) {
   const { persistMessages } = useSessions();
 
   const addMessage = useChatStore((s) => s.addMessage);
+  const updateMessage = useChatStore((s) => s.updateMessage);
   const setIsStreaming = useChatStore((s) => s.setIsStreaming);
   const clearStreamingContent = useChatStore((s) => s.clearStreamingContent);
   const setStreamingPhase = useChatStore((s) => s.setStreamingPhase);
@@ -1259,6 +1277,103 @@ export function useAgent(options?: { primary?: boolean }) {
     return () => unsub();
   }, []);
 
+  /** 执行斜杠命令（不进入模型对话；返回给用户的回执文本；onProgress 供慢命令就地刷新进度）。 */
+  const executeSlashCommand = async (
+    slash: SlashCommandMatch,
+    sessionId: string,
+    onProgress?: (text: string) => void,
+    extraHelp: readonly ExtraCommandSpec[] = [],
+  ): Promise<string> => {
+    switch (slash.command) {
+      case 'help':
+        return formatSlashHelpText(extraHelp);
+      case 'plan': {
+        const off = slash.rawArgs.trim().toLowerCase() === 'off';
+        slashCommandState.togglePlanMode(sessionId, !off);
+        return off
+          ? '已退出计划模式：agent 将按普通方式直接执行请求。'
+          : '已进入计划模式：agent 会先探索设计、产出完整计划并等你批准，批准前不执行有副作用的操作。发送 /plan off 退出。';
+      }
+      case 'goal': {
+        const args = slash.rawArgs.trim();
+        if (!args) {
+          const current = slashCommandState.getGoal(sessionId);
+          return current
+            ? `当前目标：${current}\n\n更新：/goal <新描述>；清除：/goal clear`
+            : '本会话还没有设置目标。用法：/goal <目标描述>';
+        }
+        if (args.toLowerCase() === 'clear') {
+          slashCommandState.clearGoal(sessionId);
+          return '已清除会话目标。';
+        }
+        slashCommandState.setGoal(sessionId, args);
+        return `会话目标已设置，每轮对话自动生效：\n${args}\n\n查看：/goal；清除：/goal clear`;
+      }
+      case 'compact': {
+        // isStreaming 的占用检查在 sendMessage 拦截段完成（慢命令路径会
+        // 主动置位流式状态，此处再查会自拒）。
+        const record = harnessSessionRegistry.get(sessionId);
+        if (!record) {
+          return '本会话还没有可压缩的 DeepSeek Harness 会话记录（尚未跑过 Harness 任务，或模型/技能已变化重开会话）。';
+        }
+        const settings = useSettingsStore.getState();
+        const result = await compactDshSession(record, {
+          apiKey: resolveApiKey(settings, 'provider:deepseek', settings.providerApiKeys.deepseek || ''),
+          baseUrl: settings.providerBaseUrls.deepseek || 'https://api.deepseek.com',
+        }, onProgress);
+        return result.text;
+      }
+      case 'resume': {
+        const sessions = await listDshSessions();
+        if (sessions.length === 0) {
+          return '磁盘上没有持久化的 DeepSeek Harness 会话（~/.kunpeng/dsh/sessions 为空）。';
+        }
+        const arg = slash.rawArgs.trim();
+        if (!arg) {
+          return [
+            '最近的 DeepSeek Harness 会话（按最后活动排序）：',
+            '',
+            ...formatDshSessionList(sessions),
+            '',
+            '用 `/resume <序号>` 把本聊天会话绑定到对应记录；绑定后直接发消息（或说「继续」）即可恢复其完整上下文。',
+          ].join('\n');
+        }
+        const target = /^\d+$/.test(arg)
+          ? sessions[Number.parseInt(arg, 10) - 1]
+          : sessions.find((candidate) => candidate.sessionId === arg || candidate.sessionId.startsWith(arg));
+        if (!target) {
+          return `未找到匹配的会话（${arg.slice(0, 40)}）。发送 /resume 查看完整列表。`;
+        }
+        // 绑定因子必须与轮次启动时（sessionPlan 决策）的计算完全一致，
+        // 否则下一轮仍会被判为 fresh。此处按主聊天的路由规则重建。
+        const settings = useSettingsStore.getState();
+        const agentId = useChatStore.getState().currentAgent?.id || 'main';
+        const routeStrategy = buildRouteStrategyFromSettings(
+          settings,
+          resolveApiKey(settings, 'glm', settings.glmApiKey),
+          settings.agentMetas[agentId]?.preferredProviderId,
+          null,
+        );
+        const primaryRoute = getPrimaryRouteSelection(routeStrategy);
+        const harnessModel = primaryRoute.modelId || settings.providerModels.deepseek || 'deepseek-flash';
+        const skillSig = skillCatalogSignature(skillLoaderRef.current?.getAll() ?? []);
+        harnessSessionRegistry.record(sessionId, {
+          sessionId: target.sessionId,
+          workspace: target.cwd,
+          model: harnessModel,
+          skillSig,
+        });
+        return [
+          `已把本聊天会话绑定到 Harness 会话 \`${target.sessionId.slice(0, 8)}…\`（workspace：${target.cwd}）。`,
+          `下一轮将自动恢复其完整工作记忆（含全部工具调用与中间产物），按当前模型 ${harnessModel} 接续。`,
+          '直接发消息即可，无需其他操作。',
+        ].join('\n');
+      }
+      default:
+        return '未知命令。' + formatSlashHelpText();
+    }
+  };
+
   /** 发送消息 */
   const sendMessage = useCallback(
     async (content: string, filePaths?: string[]) => {
@@ -1399,44 +1514,9 @@ export function useAgent(options?: { primary?: boolean }) {
       userAbortedRef.current = false;
       const runToken = ++activeRunTokenRef.current;
       const isCurrentRun = () => activeRunTokenRef.current === runToken && !userAbortedRef.current;
-      const cmdText = displayContent;
-      if (cmdText.startsWith('/')) {
-        let result: Awaited<ReturnType<typeof executeCommand>>;
-        try {
-          result = await executeCommand(cmdText, {
-            coordinator,
-            addSystemMessage: (msg) => {
-              addMessage({
-                id: randomUUID(),
-                role: 'system',
-                content: msg,
-                timestamp: Date.now(),
-              });
-            },
-            skillLoader: skillLoaderRef.current || undefined,
-            mcpManager: mcpManagerRef.current || undefined,
-            toolRegistry: coordinator.getToolRegistry(),
-            apiKey: glmApiKey || undefined,
-          });
-        } catch (err) {
-          sendingRef.current = false;
-          throw err;
-        }
-
-        if (result.handled) {
-          sendingRef.current = false;
-          // Add command output as system message
-          if (result.output) {
-            addMessage({
-              id: randomUUID(),
-              role: 'assistant',
-              content: result.output,
-              timestamp: Date.now(),
-            });
-          }
-          return;
-        }
-      }
+      // 斜杠命令统一在下方（sessionId 锁定后）的路由段拦截：旧版在此处
+      // 直接执行 legacy 命令，会把 DSH 会话命令（/compact /plan /goal
+      // /resume /help）和所有 / 开头的普通消息（路径等）一并吞掉。
 
       // A drawer and the main chat are two views of the same task. Recover a
       // temporarily lost active session before creating anything new.
@@ -1451,6 +1531,168 @@ export function useAgent(options?: { primary?: boolean }) {
       // which session we write to. All persist/streaming callbacks use this value.
       const sessionId = useChatStore.getState().currentSessionId;
       activeRunSessionRef.current = sessionId;
+
+      // ── 斜杠命令统一拦截：命令直接针对会话/agent 操作，不进入模型对话 ──
+      // 路由优先级：
+      //   1. DSH 会话命令（compact/plan/goal/resume/help）——/compact 在
+      //      非 Harness 引擎的聊天里回落为传统上下文压缩；
+      //   2. 传统命令（auto/cwd/skill/mcp/evolve/cost/clear……legacy 注册表，
+      //      help/compact 除外，已被本层接管）；
+      //   3. 其他工具的常见命令词（/stop /exit 等）：回执未知命令 + 指引；
+      //   4. 其余 / 开头输入（路径等）：按普通消息发送给模型。
+      const cmdName = parseSlashCommandName(displayContent);
+      // 传统命令注册表在模块加载后即固定，无需缓存。
+      const legacyCommands = getAllCommands().filter((command) => command.name !== 'help' && command.name !== 'compact');
+      const legacyMatch = cmdName ? legacyCommands.find((command) => command.name === cmdName) : undefined;
+      // /compact：Harness 引擎走 DSH 会话压缩；内置引擎聊天保留传统语义
+      // （coordinator 上下文压缩）。
+      const compactViaLegacy = cmdName === 'compact' && !usingHarness;
+      const slash = compactViaLegacy ? null : parseSlashCommand(displayContent);
+      const unknownCommandName = !slash && !legacyMatch && !compactViaLegacy
+        ? isUnknownSlashCommandName(displayContent)
+        : null;
+      const legacyHelpSpecs = legacyCommands.map((command) => ({
+        usage: `/${command.name}`,
+        description: command.description,
+      }));
+      if (slash || legacyMatch || compactViaLegacy || unknownCommandName) {
+        if (!isPrimary || !sessionId) {
+          addMessage({
+            id: randomUUID(),
+            role: 'assistant',
+            content: '命令仅支持在主对话中使用。',
+            timestamp: Date.now(),
+          });
+          persistUiMessages(sessionId ?? undefined);
+          sendingRef.current = false;
+          return;
+        }
+        // 命令回显立即入列：让用户第一时间看到命令已被识别并开始执行，
+        // 而不是等（可能长达一分钟的）执行结束后才出现消息对。
+        addMessage({
+          id: randomUUID(),
+          role: 'user',
+          content: displayContent,
+          timestamp: Date.now(),
+        });
+        persistUiMessages(sessionId);
+        if (unknownCommandName) {
+          addMessage({
+            id: randomUUID(),
+            role: 'assistant',
+            content: [
+              `未知命令：/${unknownCommandName}`,
+              '',
+              formatSlashHelpText(legacyHelpSpecs),
+              '',
+              '提示：同一会话的 Harness 上下文会自动恢复，直接说「继续」即可衔接上一轮。',
+            ].join('\n'),
+            timestamp: Date.now(),
+          });
+          persistUiMessages(sessionId);
+          sendingRef.current = false;
+          return;
+        }
+        // 传统命令（含内置引擎聊天的 /compact）：执行并回执。
+        if (legacyMatch || compactViaLegacy) {
+          const receiptId = randomUUID();
+          try {
+            const result = await executeCommand(displayContent, {
+              coordinator,
+              addSystemMessage: (msg) => {
+                addMessage({
+                  id: randomUUID(),
+                  role: 'system',
+                  content: msg,
+                  timestamp: Date.now(),
+                });
+              },
+              skillLoader: skillLoaderRef.current || undefined,
+              mcpManager: mcpManagerRef.current || undefined,
+              toolRegistry: coordinator.getToolRegistry(),
+              apiKey: glmApiKey || undefined,
+            });
+            addMessage({
+              id: receiptId,
+              role: 'assistant',
+              content: result.output || `已执行 ${displayContent.split(/\s+/)[0]}。`,
+              timestamp: Date.now(),
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            agentLog.warn('Agent', `legacy command failed: ${message}`);
+            addMessage({
+              id: receiptId,
+              role: 'assistant',
+              content: `命令执行失败：${message.slice(0, 200)}`,
+              timestamp: Date.now(),
+            });
+          }
+          persistUiMessages(sessionId);
+          sendingRef.current = false;
+          return;
+        }
+        // 走到这里 slash 必非空（外层条件已排除其余三路）。
+        if (!slash) {
+          sendingRef.current = false;
+          return;
+        }
+        // /compact 在 agent 执行中不可用：临时进程会与活跃任务争抢同一
+        // 持久化会话文件。先于慢命令路径给出即时回执。
+        if (slash.command === 'compact' && useChatStore.getState().isStreaming) {
+          addMessage({
+            id: randomUUID(),
+            role: 'assistant',
+            content: '压缩暂不可用：agent 正在执行任务。请等本轮结束后再试。',
+            timestamp: Date.now(),
+          });
+          persistUiMessages(sessionId);
+          sendingRef.current = false;
+          return;
+        }
+        // /compact 耗时较长（临时进程 + DeepSeek 摘要，约 20–60 秒）：
+        // 1) 先落一条"执行中"回执占位，进度与结果通过 updateMessage 原地刷新；
+        // 2) 执行期间置为流式状态——输入框禁用（sendingRef 会静默丢弃并发
+        //    消息，必须让用户看到占用态）并显示耗时指示，与正常轮次一致。
+        const isSlowCommand = slash.command === 'compact';
+        const receiptId = randomUUID();
+        if (isSlowCommand) {
+          startStreaming(sessionId);
+          addMessage({
+            id: receiptId,
+            role: 'assistant',
+            content: '正在准备压缩……',
+            timestamp: Date.now(),
+          });
+        }
+        try {
+          const reply = await executeSlashCommand(
+            slash,
+            sessionId,
+            isSlowCommand ? (text) => updateMessage(receiptId, text) : undefined,
+            legacyHelpSpecs,
+          );
+          if (isSlowCommand) updateMessage(receiptId, reply);
+          else addMessage({ id: receiptId, role: 'assistant', content: reply, timestamp: Date.now() });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          agentLog.warn('Agent', `slash command ${slash.command} failed: ${message}`);
+          if (isSlowCommand) updateMessage(receiptId, `命令执行失败：${message.slice(0, 200)}`);
+          else addMessage({ id: receiptId, role: 'assistant', content: `命令执行失败：${message.slice(0, 200)}`, timestamp: Date.now() });
+        } finally {
+          if (isSlowCommand) {
+            setIsStreaming(false);
+            setStreamingSessionId(null);
+            setSessionStreaming(sessionId, false);
+            clearStreamingContent();
+            setStreamingPhase('idle');
+          }
+        }
+        persistUiMessages(sessionId);
+        sendingRef.current = false;
+        return;
+      }
+
       const decisionSource = { sourceView: decisionView, sourceSessionId: sessionId,
         sourceLabel: useChatStore.getState().sessions.find(session => session.id === sessionId)?.title };
       const resumeContext = isOrdinaryChatRun
@@ -1843,13 +2085,18 @@ export function useAgent(options?: { primary?: boolean }) {
           parentRunId: runId,
           parentRegistry: registry,
           callbacks,
-          createCoordinator: ({ registry: childRegistry, parentAbortController, idempotencyRunId, maxTurns: childMaxTurns }) =>
-            coordinator.createSubagentCoordinator(
+          createCoordinator: ({ registry: childRegistry, parentAbortController, idempotencyRunId, maxTurns: childMaxTurns, persona }) => {
+            const personaRules = persona && persona in SUBAGENT_PERSONA_METAS
+              ? SUBAGENT_PERSONA_METAS[persona as SubagentPersona].rules
+              : undefined;
+            return coordinator.createSubagentCoordinator(
               childRegistry,
               parentAbortController,
               idempotencyRunId,
               childMaxTurns,
-            ),
+              personaRules,
+            );
+          },
         });
         registry.bindRunContext(runId, {
           decisionSource,
@@ -1881,6 +2128,16 @@ export function useAgent(options?: { primary?: boolean }) {
           // 但不进入持久历史；DSH 链路仍只拼进当轮 input。
           stagePrefix = buildPipelineStagePrefix(displayContent, { unfinishedTodos });
         }
+        // 斜杠命令状态（计划模式 / 会话目标）每轮注入，直到显式关闭/清除。
+        {
+          const commandPrefixes: string[] = [];
+          if (slashCommandState.isPlanMode(sessionId)) commandPrefixes.push(buildPlanModePrefix());
+          const goal = slashCommandState.getGoal(sessionId);
+          if (goal) commandPrefixes.push(buildGoalPrefix(goal));
+          if (commandPrefixes.length > 0) {
+            stagePrefix = [commandPrefixes.join('\n\n'), stagePrefix].filter(Boolean).join('\n\n');
+          }
+        }
         let mediaBlocks: AgentUserContentBlock[] = [];
         if (primaryRoute.providerId === 'kimi' && filePaths?.length) {
           const media = await buildKimiMediaBlocks(filePaths, runId);
@@ -1898,12 +2155,25 @@ export function useAgent(options?: { primary?: boolean }) {
             currentAgentId,
             skillCatalogSignature(skillLoaderRef.current?.getAll() ?? []),
           );
+          // L3 会话复用因子提前到 try 外：失败分支（catch）也要能登记
+          // 失败轮的 sessionId，供下一轮 resume 磁盘恢复。
+          const harnessModel = primaryRoute.modelId || settings.providerModels.deepseek || 'deepseek-flash';
+          const skillSig = skillCatalogSignature(skillLoaderRef.current?.getAll() ?? []);
+          const sessionPlan = resolveHarnessSessionPlan(harnessSessionRegistry, {
+            chatSessionId: sessionId,
+            model: harnessModel,
+            skillSig,
+            todayWorkspace: coordinator.getCwd(),
+          });
           try {
             const context = await coordinator.buildHarnessTurnContext(finalContent);
-            const history = buildDshConversationContext(coordinator.getMessages());
+            const history = sessionPlan.mode === 'fresh'
+              ? buildDshConversationContext(coordinator.getMessages())
+              : '';
             let input = context.turnContext
               ? `${context.turnContext}\n\n[用户请求]\n${finalContent}`
               : finalContent;
+            if (history) input = `${history}\n\n${input}`;
             if (resumeContext) input = `${resumeContext}\n\n${input}`;
             if (stagePrefix) input = `${stagePrefix}\n\n${input}`;
             if (filePaths?.length) mediaBlocks = await buildDshMediaBlocks(filePaths);
@@ -1911,7 +2181,6 @@ export function useAgent(options?: { primary?: boolean }) {
             // Video remains a separate analysis/transcription tool flow.
             const hasImageMedia = mediaBlocks.some((block) => block.type === 'image');
             const hasVideoMedia = mediaBlocks.some((block) => block.type === 'video');
-            const harnessModel = primaryRoute.modelId || settings.providerModels.deepseek || 'deepseek-flash';
             const harnessVisionCapable = harnessModel === 'deepseek-flash' || /vision/i.test(harnessModel);
             if (hasImageMedia && !hasVideoMedia && !harnessVisionCapable) {
               executingHarness = false;
@@ -1954,7 +2223,8 @@ export function useAgent(options?: { primary?: boolean }) {
                   + '调用工具时必须使用工具列表里给出的完整名称，不要省略前缀。',
                 history,
               ].filter(Boolean).join('\n\n'),
-              workspace: coordinator.getCwd(),
+              workspace: sessionPlan.mode === 'resume' ? sessionPlan.workspace : coordinator.getCwd(),
+              ...(sessionPlan.mode === 'resume' ? { resumeSessionId: sessionPlan.sessionId } : {}),
               maxTokens: 32_768,
               contextWindow: 1_000_000,
               input,
@@ -1962,6 +2232,21 @@ export function useAgent(options?: { primary?: boolean }) {
               toolRegistry: coordinator.getToolRegistry(),
               callbacks,
             });
+            // 成功轮：登记本聊天会话的 DSH 会话，供下一轮 resume。
+            if (result.sessionId) {
+              harnessSessionRegistry.record(sessionId, {
+                sessionId: result.sessionId,
+                workspace: sessionPlan.mode === 'resume' ? sessionPlan.workspace : coordinator.getCwd(),
+                model: harnessModel,
+                skillSig,
+              });
+            }
+            if (result.resumed) {
+              useRunStepStore.getState().addProgressUpdate(
+                '已恢复本会话的 DeepSeek Harness 会话：上一轮的完整工作记录（含工具调用与产物）继续可用。',
+                runId,
+              );
+            }
             coordinator.recordHarnessTurn(finalContent, result.text, result.thinking, mediaBlocks);
             persistAgentMsgs();
             callbacks.onComplete(result.text);
@@ -1970,7 +2255,15 @@ export function useAgent(options?: { primary?: boolean }) {
             if (!isCurrentRun()) return;
             const normalized = error instanceof Error ? error : new Error(String(error));
             agentLog.error('DeepSeekHarness', normalized.message);
-            if (shouldFallbackHarnessToBuiltin(error, bridge.hasVisibleOutput())) {
+            // 断点保全：即使本轮失败，也要让用户请求和已执行进度进入对话
+            // 历史（下一轮回放可见），而不是整轮蒸发。
+            const turnProgress = collectHarnessTurnProgress(
+              useRunStepStore.getState().runsById[runId]?.steps,
+            );
+            if (
+              shouldFallbackHarnessToBuiltin(error, bridge.hasVisibleOutput())
+              || shouldContinueWithBuiltin(error, turnProgress)
+            ) {
               const reason = normalized.message.replace(/\s+/g, ' ').trim().slice(0, 240);
               executingHarness = false;
               useDeepseekHarnessStore.getState().markFallback(runId);
@@ -1986,9 +2279,38 @@ export function useAgent(options?: { primary?: boolean }) {
               coordinator.setRouteStrategy(deepseekBuiltinRoute(primaryRoute.modelId));
               if (resumeContext) coordinator.queueTransientNotice(resumeContext);
               if (stagePrefix) coordinator.queueRunNotice(stagePrefix);
+              // 续接降级（仅免费工具轮次）：把已完成步骤随行，避免从零重做。
+              const completedStepsNotice = buildCompletedStepsRunNotice(turnProgress);
+              if (completedStepsNotice) coordinator.queueRunNotice(completedStepsNotice);
               resumeContextDelivered = true;
               await coordinator.run(finalContent, callbacks, mediaBlocks, runId);
+            } else if (isAbortError(error)) {
+              // 用户手动中止：不写失败记录（resumeContext 的待办/产物路径
+              // 已覆盖续做所需），保持历史干净。
+              callbacks.onError(normalized);
             } else {
+              // 无法安全降级（已有付费执行）→ 把失败轮写进历史，
+              // 用户说「继续」时模型能接上话头而不是失忆。
+              // L3：同时保留本轮 sessionId——下一轮 resume 磁盘会话时，
+              // 模型能看到失败轮的完整工具调用历史（比文本摘要彻底）。
+              const failedSessionId = bridge.getSessionId();
+              if (failedSessionId) {
+                harnessSessionRegistry.record(sessionId, {
+                  sessionId: failedSessionId,
+                  workspace: sessionPlan.mode === 'resume' ? sessionPlan.workspace : coordinator.getCwd(),
+                  model: harnessModel,
+                  skillSig,
+                });
+              }
+              try {
+                coordinator.recordHarnessTurn(
+                  finalContent,
+                  buildHarnessFailureRecord(normalized, turnProgress),
+                );
+                persistAgentMsgs();
+              } catch (recordError) {
+                agentLog.warn('DeepSeekHarness', 'failed-turn record skipped', recordError);
+              }
               callbacks.onError(normalized);
             }
           } finally {

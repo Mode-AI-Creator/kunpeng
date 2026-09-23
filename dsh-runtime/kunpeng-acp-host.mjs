@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import net from 'node:net';
 import z from '@deepseek-ai/schemastery';
 // Official ACP handles native attachments and tool-result images.
 import * as acp from '@deepseek-ai/dsh-acp';
@@ -145,5 +146,74 @@ export async function apply(ctx, config) {
     });
     await transport;
     yield transport.dispose;
+
+    // Kunpeng sidecar: loopback command channel for host-side operations the
+    // ACP method surface does not expose (manual compaction today). Frontend
+    // reaches it through the Rust bridge (dsh_sidecar_call) which learns the
+    // port from the __KUNPENG_SIDECAR__ stderr line below.
+    const sidecar = ctx.plugin({
+      name: 'kunpeng-sidecar',
+      inject: ['agents', 'compaction'],
+      apply(sidecarCtx) {
+        void sidecarCtx.effect(async function* () {
+          const server = net.createServer((socket) => {
+            socket.setEncoding('utf8');
+            socket.setNoDelay(true);
+            let buffer = '';
+            socket.on('data', (chunk) => {
+              buffer += chunk;
+              let newline;
+              while ((newline = buffer.indexOf('\n')) >= 0) {
+                const line = buffer.slice(0, newline).trim();
+                buffer = buffer.slice(newline + 1);
+                if (!line) continue;
+                let message;
+                try {
+                  message = JSON.parse(line);
+                } catch {
+                  socket.write(`${JSON.stringify({ ok: false, error: 'invalid json' })}\n`);
+                  continue;
+                }
+                void (async () => {
+                  try {
+                    if (message.command === 'compact') {
+                      // 复刻官方 dsh-command-compact 的核心：对本进程内活跃
+                      // 的 agent 执行一次手动压缩。鲲鹏的压缩进程只 resume 一
+                      // 个会话，因此进程内 agent 唯一。
+                      const agents = sidecarCtx.agents.list().filter(Boolean);
+                      if (agents.length === 0) {
+                        socket.write(`${JSON.stringify({ ok: false, error: 'no active agent to compact' })}\n`);
+                        return;
+                      }
+                      const agent = agents[0];
+                      const result = await sidecarCtx.compaction.compactNow(
+                        agent,
+                        AbortSignal.timeout(10 * 60 * 1000),
+                        'kunpeng-sidecar',
+                      );
+                      socket.write(`${JSON.stringify({ ok: true, result })}\n`);
+                    } else {
+                      socket.write(`${JSON.stringify({ ok: false, error: `unknown command: ${String(message.command)}` })}\n`);
+                    }
+                  } catch (error) {
+                    const text = error && typeof error.message === 'string' ? error.message : String(error);
+                    socket.write(`${JSON.stringify({ ok: false, error: text })}\n`);
+                  }
+                })();
+              }
+            });
+          });
+          const listening = new Promise((resolve, reject) => {
+            server.once('error', reject);
+            server.listen(0, '127.0.0.1', () => resolve(server.address()));
+          });
+          const address = await listening;
+          process.stderr.write(`__KUNPENG_SIDECAR__${JSON.stringify({ port: address.port })}\n`);
+          yield () => new Promise((resolve) => server.close(() => resolve()));
+        });
+      },
+    });
+    await sidecar;
+    yield sidecar.dispose;
   }, 'kunpeng-acp-host.composition');
 }

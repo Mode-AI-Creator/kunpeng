@@ -20,6 +20,8 @@ export interface DshRunOptions extends DshStartOptions {
   toolRegistry: ToolRegistry;
   callbacks: CoordinatorCallbacks;
   signal?: AbortSignal;
+  /** 上一轮持久化会话 id：存在时优先 session/resume，失败降级 session/new。 */
+  resumeSessionId?: string;
 }
 
 export interface DshRunResult {
@@ -27,6 +29,10 @@ export interface DshRunResult {
   thinking: string;
   visibleOutput: boolean;
   stopReason?: string;
+  /** 本轮实际使用的 ACP 会话 id（resume 与新建都会返回）。 */
+  sessionId: string;
+  /** true = 恢复了上一轮会话（历史已在 DSH 内，无需文本回放）。 */
+  resumed: boolean;
 }
 
 export interface DshAcpLineEvent {

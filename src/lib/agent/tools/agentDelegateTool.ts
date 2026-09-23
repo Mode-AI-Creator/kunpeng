@@ -1,4 +1,5 @@
 import type { AgentDelegateRequest, Tool, ToolExecutionContext } from '../types';
+import { SUBAGENT_PERSONAS, SUBAGENT_PERSONA_METAS } from '../../../types/agent.ts';
 
 export const SUBAGENT_TOOL_GROUPS = ['read', 'generate', 'web', 'files', 'project'] as const;
 
@@ -23,23 +24,38 @@ export function normalizeDelegateRequest(params: Record<string, unknown>): Agent
   );
   const rawTimeout = typeof params.timeout_sec === 'number' ? params.timeout_sec : 600;
   const timeoutSec = Math.min(1800, Math.max(1, Math.round(rawTimeout)));
+  const persona = typeof params.persona === 'string' && (SUBAGENT_PERSONAS as readonly string[]).includes(params.persona)
+    ? params.persona
+    : undefined;
   return {
     task,
     ...(context ? { context } : {}),
     ...(toolGroups?.length ? { toolGroups: [...new Set(toolGroups)] } : {}),
     timeoutSec,
+    ...(persona ? { persona } : {}),
   };
 }
+
+const personaOptions = SUBAGENT_PERSONAS
+  .map((id) => `${id}（${SUBAGENT_PERSONA_METAS[id].label}）`)
+  .join('、');
 
 export const agentDelegateTool: Tool = {
   definition: {
     name: 'agent_delegate',
-    description: '把一个边界清楚、可独立完成的子任务交给隔离子代理。适合并行分析、撰写或生成；不适合需要持续向用户追问和即时判断的任务。子代理默认只能读取资料和调用生成类工具，最大并行数为 3。',
+    description: '把一个边界清楚、可独立完成的子任务交给隔离子代理。适合并行分析、撰写或生成；不适合需要持续向用户追问和即时判断的任务。'
+      + `支持专业角色 persona（可选：${personaOptions}）：写剧本、EP 扩充、拆分镜头等创作任务应使用 persona=showrunner，由制片人子代理按生活化台词、紧凑节奏、长短镜头与自然过渡的专属规范执行。`
+      + '子代理默认只能读取资料和调用生成类工具，最大并行数为 3。',
     parameters: {
       type: 'object',
       properties: {
         task: { type: 'string', description: '完整子任务：目标、限制、交付物和验收方式。' },
         context: { type: 'string', description: '必要交接上下文、已确认事实和准确产物路径。' },
+        persona: {
+          type: 'string',
+          description: `专业角色。可选值：${SUBAGENT_PERSONAS.join('、')}。创作类任务（剧本/拆镜）用 showrunner。`,
+          enum: [...SUBAGENT_PERSONAS],
+        },
         tool_groups: {
           type: 'array',
           description: '允许的工具组。默认 read + generate；可选 read、generate、web、files、project。',

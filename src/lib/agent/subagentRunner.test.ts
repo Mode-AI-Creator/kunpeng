@@ -127,6 +127,31 @@ test('child namespace and parent paid-ledger namespace stay distinct', async () 
   assert.equal(runner.getActiveCount(), 0);
 });
 
+test('persona flows to the coordinator factory and into the handoff prompt', async () => {
+  const seenPersonas: Array<string | undefined> = [];
+  const handoffs: string[] = [];
+  const runner = new SubagentRunner({
+    parentRunId: 'run-p',
+    parentRegistry: new FakeRegistry(['read_file', 'write_file']) as unknown as ToolRegistry,
+    callbacks: callbacks([]),
+    createCoordinator: (args) => {
+      seenPersonas.push(args.persona);
+      return {
+        abort: () => {},
+        run: async (input) => {
+          handoffs.push(input);
+        },
+      };
+    },
+  });
+
+  await runner.run({ task: '写本集剧本', persona: 'showrunner', toolGroups: ['read', 'files'] });
+  await runner.run({ task: '通用分析' });
+  assert.deepEqual(seenPersonas, ['showrunner', undefined]);
+  assert.match(handoffs[0], /专业角色.*showrunner/);
+  assert.doesNotMatch(handoffs[1], /专业角色/);
+});
+
 test('same parent allows at most three concurrent children and releases slots', async () => {
   const releases: Array<ReturnType<typeof deferred>> = [];
   const runner = new SubagentRunner({
